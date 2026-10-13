@@ -110,6 +110,14 @@ def test_model_cannot_override_validated_status() -> None:
     assert classify_lab_result("13.5 g/dL", "12.0 - 15.5 g/dL", "BELOW RANGE") == "Normal"
 
 
+def test_boundary_values_are_normal() -> None:
+    """Values exactly on the lower/upper bound count as within range."""
+    assert classify_lab_result("12.0 g/dL", "12.0 - 15.5 g/dL") == "Normal"
+    assert classify_lab_result("15.5 g/dL", "12.0 - 15.5 g/dL") == "Normal"
+    assert classify_lab_result("11.9 g/dL", "12.0 - 15.5 g/dL") == "Low"
+    assert classify_lab_result("15.6 g/dL", "12.0 - 15.5 g/dL") == "High"
+
+
 # ── 2. Response Parsing & Schema Contract Tests ────────────────────────────
 
 def test_parse_qwen_markdown_response_schema() -> None:
@@ -171,7 +179,7 @@ async def test_hf_endpoint_timeout_handling() -> None:
 
     with patch("asyncio.wait_for", side_effect=mock_timeout):
         with pytest.raises(HTTPException) as exc_info:
-            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing.")
+            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL.")
         assert exc_info.value.status_code == 503
         assert "timed out" in exc_info.value.detail.lower()
 
@@ -183,7 +191,7 @@ async def test_hf_endpoint_connection_error_handling() -> None:
 
     with patch("app.services.hf_space_service.Client", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing.")
+            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL.")
         assert exc_info.value.status_code == 503
         assert "unavailable" in exc_info.value.detail.lower()
 
@@ -195,7 +203,7 @@ async def test_hf_rate_limit_error_handling() -> None:
 
     with patch("app.services.hf_space_service.Client", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing.")
+            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL.")
         assert exc_info.value.status_code == 503
         assert "rate limit" in exc_info.value.detail.lower() or "quota" in exc_info.value.detail.lower()
 
@@ -207,7 +215,7 @@ async def test_hf_auth_error_when_token_required() -> None:
 
     with patch("app.services.hf_space_service.Client", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing.")
+            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL.")
         assert exc_info.value.status_code == 503
         assert "authentication" in exc_info.value.detail.lower() or "hf_token" in exc_info.value.detail.lower()
 
@@ -221,7 +229,7 @@ async def test_hf_error_markdown_is_not_treated_as_analysis() -> None:
 
     with patch("app.services.hf_space_service.Client", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing.")
+            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL.")
         assert exc_info.value.status_code == 502
 
 
@@ -234,11 +242,130 @@ async def test_malformed_model_response_raises_502() -> None:
 
     with patch("app.services.hf_space_service.Client", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing.")
+            await analyse_report_text_hf("Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL.")
         assert exc_info.value.status_code == 502
 
 
 # ── 5. Integration Router via analyse_report_text ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_hf_failure_does_not_silently_fall_back() -> None:
+    """A failed Hugging Face request must raise, never return offline data."""
+    mock_client = MagicMock()
+    mock_client.predict.side_effect = RuntimeError("Could not connect to Space host")
+
+    with patch("app.core.config.settings.AI_MODE", "hf_space"):
+        with patch("app.services.hf_space_service.Client", return_value=mock_client):
+            with pytest.raises(HTTPException) as exc_info:
+                await analyse_report_text(HEMOGLOBIN_REPORT)
+            assert exc_info.value.status_code == 503
+
+
+# ── 6. Abbreviated-model-output fallback parsing ─────────────────────────
+
+ABBREVIATED_QWEN_OUTPUT = """### Overall Summary
+The report indicates mild anemia with hemoglobin below the reference range.
+
+### Final Consistency Check
+- Hemoglobin: 10.2 g/dL (12.0 - 15.5 g/dL) \u2013 BELOW RANGE
+- Fasting Blood Glucose: 110 mg/dL (70 - 99 mg/dL) \u2013 ABOVE RANGE
+- Serum Creatinine: 0.9 mg/dL (0.6 - 1.2 mg/dL) \u2013 WITHIN RANGE
+"""
+
+TABLE_QWEN_OUTPUT = """### Overall Summary
+Results are tabulated below.
+
+| Test | Value | Reference Range |
+|---|---|---|
+| Hemoglobin | 10.2 g/dL | 12.0 - 15.5 g/dL |
+| Fasting Blood Glucose | 110 mg/dL | 70 - 99 mg/dL |
+"""
+
+
+def test_parse_consistency_check_fallback() -> None:
+    """Checklist-only output still yields validated parameters, not a 502."""
+    parsed = _parse_qwen_markdown_response(ABBREVIATED_QWEN_OUTPUT)
+    assert len(parsed["parameters"]) == 3
+    hb = next(p for p in parsed["parameters"] if "hemoglobin" in p["name"].lower())
+    assert hb["value"] == 10.2
+    assert hb["status"] == "Low"
+    gl = next(p for p in parsed["parameters"] if "glucose" in p["name"].lower())
+    assert gl["status"] == "High"
+
+
+def test_parse_markdown_table_fallback() -> None:
+    """Table-only output still yields validated parameters, not a 502."""
+    parsed = _parse_qwen_markdown_response(TABLE_QWEN_OUTPUT)
+    assert len(parsed["parameters"]) == 2
+    hb = next(p for p in parsed["parameters"] if "hemoglobin" in p["name"].lower())
+    assert hb["value"] == 10.2
+    assert hb["status"] == "Low"
+
+
+@pytest.mark.asyncio
+async def test_abbreviated_model_response_no_longer_502() -> None:
+    """End-to-end: abbreviated Space output returns an analysis result."""
+    mock_client = MagicMock()
+    mock_client.predict.return_value = ABBREVIATED_QWEN_OUTPUT
+
+    with patch("app.services.hf_space_service.Client", return_value=mock_client):
+        result = await analyse_report_text_hf(
+            "Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL."
+        )
+    hb = next(p for p in result["parameters"] if "hemoglobin" in p["name"].lower())
+    assert hb["status"] == "Low"
+
+
+# ── 7. Retry on transient unparseable output & non-lab fast-fail ──────────
+
+UNSTRUCTURED_TEXT = (
+    "This is a long but unstructured paragraph with no laboratory parameter "
+    "blocks and no usable clinical content whatsoever."
+)
+
+
+@pytest.mark.asyncio
+async def test_unparseable_response_is_retried_once_then_502() -> None:
+    """First malformed generation is retried; success on 2nd attempt wins."""
+    mock_client = MagicMock()
+    mock_client.predict.side_effect = [UNSTRUCTURED_TEXT, MOCK_QWEN_OUTPUT]
+
+    with patch("app.services.hf_space_service.Client", return_value=mock_client):
+        result = await analyse_report_text_hf(
+            "Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL."
+        )
+    assert mock_client.predict.call_count == 2
+    hb = next(p for p in result["parameters"] if "hemoglobin" in p["name"].lower())
+    assert hb["status"] == "Low"
+
+
+@pytest.mark.asyncio
+async def test_persistent_unparseable_response_raises_502() -> None:
+    mock_client = MagicMock()
+    mock_client.predict.return_value = UNSTRUCTURED_TEXT
+
+    with patch("app.services.hf_space_service.Client", return_value=mock_client):
+        with pytest.raises(HTTPException) as exc_info:
+            await analyse_report_text_hf(
+                "Sample medical report text with sufficient characters for testing. Glucose 100 mg/dL."
+            )
+    assert exc_info.value.status_code == 502
+    assert mock_client.predict.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_report_without_digits_fails_fast_without_space_call() -> None:
+    """Prose with no numeric values gets a 422 before any Space request."""
+    mock_client = MagicMock()
+    with patch("app.services.hf_space_service.Client", return_value=mock_client):
+        with pytest.raises(HTTPException) as exc_info:
+            await analyse_report_text_hf(
+                "This discharge letter describes the patient visit and advises "
+                "rest and follow up with the family doctor next week please."
+            )
+    assert exc_info.value.status_code == 422
+    assert "numeric" in exc_info.value.detail.lower() or "measurable" in exc_info.value.detail.lower()
+    mock_client.predict.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_analyse_report_text_routes_to_hf_space() -> None:

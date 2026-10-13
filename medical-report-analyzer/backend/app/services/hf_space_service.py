@@ -27,6 +27,7 @@ from app.services.lab_validation import (
     build_validated_context_block,
     classify_lab_result,
     classify_numerical_status as _classify_numerical_status,
+    extract_unit,
     parse_numeric_value_and_range as _parse_numeric_value_and_range,
 )
 
@@ -186,6 +187,15 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
 
     param_map = {p["name"].lower(): p for p in parameters}
 
+    if not parameters:
+        # The model sometimes abbreviates its answer (summary + consistency
+        # checklist, or a Markdown table) instead of the full template.
+        # Fall back to lenient formats before giving up with a 502.
+        parameters = _parse_consistency_check_lines(raw_text)
+        if not parameters:
+            parameters = _parse_markdown_table_rows(raw_text)
+        param_map = {p["name"].lower(): p for p in parameters}
+
     def find_param(*aliases: str) -> Optional[Dict[str, Any]]:
         for alias in aliases:
             for k, p in param_map.items():
@@ -218,6 +228,7 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
         high_reason="{name} ({val} {unit}) is above the reference range printed on the report.",
         low_reason="{name} ({val} {unit}) is below the reference range printed on the report.",
         normal_reason="{name} ({val} {unit}) is within the reference range printed on the report.",
+        low_level="Moderate Risk",
     )
     cardio_risk = _risk_from_status(
         cardio_p,
@@ -239,6 +250,91 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
     }
 
 
+def _parse_consistency_check_lines(raw_text: str) -> List[Dict[str, Any]]:
+    """Fallback parser for `- Name: value unit (low - high unit)` summary lines.
+
+    Used only when the primary `**Test name**` template yields no parameters
+    (e.g. the model abbreviated its answer or the output was truncated).
+    Status is still derived deterministically via :func:`classify_lab_result`.
+    """
+    parameters: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    pattern = re.compile(
+        r"^-\s*(?P<name>[^:\n]{2,60}?):\s*"
+        r"(?P<val>-?\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z/%^0-9.µu-]{0,20})"
+        r"\s*\((?P<range>[^)\n]{1,80})\)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    for match in pattern.finditer(raw_text):
+        name = match.group("name").strip(" -*")
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        val_raw = match.group("val")
+        unit = (match.group("unit") or "").strip()
+        ref_range = match.group("range").strip()
+        try:
+            numeric_val: Any = float(val_raw) if "." in val_raw else int(val_raw)
+        except ValueError:
+            numeric_val = val_raw
+        parameters.append(
+            {
+                "name": name,
+                "value": numeric_val,
+                "unit": unit,
+                "status": classify_lab_result(f"{val_raw} {unit}".strip(), ref_range),
+                "reference_range": ref_range or None,
+            }
+        )
+    return parameters
+
+
+def _parse_markdown_table_rows(raw_text: str) -> List[Dict[str, Any]]:
+    """Fallback parser for `| Test | Value | Reference range | ... |` tables.
+
+    Used only when the primary `**Test name**` template yields no parameters.
+    Status is still derived deterministically via :func:`classify_lab_result`.
+    """
+    parameters: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        if not re.search(r"-?\d+(?:\.\d+)?", cells[1]):
+            continue  # header or separator row
+        name = re.sub(r"\*+", "", cells[0]).strip()
+        key = name.lower()
+        if not name or key in seen or "test" in key and "name" in key:
+            continue
+        seen.add(key)
+        val_text = re.sub(r"\*+", "", cells[1]).strip()
+        ref_range = re.sub(r"\*+", "", cells[2]).strip()
+        num_match = re.search(r"-?\d+(?:\.\d+)?", val_text)
+        if not num_match:
+            continue
+        raw_num = num_match.group(0)
+        try:
+            numeric_val: Any = float(raw_num) if "." in raw_num else int(raw_num)
+        except ValueError:
+            continue
+        unit = extract_unit(val_text)
+        parameters.append(
+            {
+                "name": name,
+                "value": numeric_val,
+                "unit": unit,
+                "status": classify_lab_result(val_text, ref_range),
+                "reference_range": ref_range or None,
+            }
+        )
+    return parameters
+
+
 async def analyse_report_text_hf(extracted_text: str) -> Dict[str, Any]:
     """
     Send extracted medical report text to the deployed Hugging Face Space
@@ -248,6 +344,18 @@ async def analyse_report_text_hf(extracted_text: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Extracted text is too short to analyse. Please upload a valid medical report.",
+        )
+
+    if not re.search(r"\d", extracted_text):
+        # No measurable values at all (e.g. a prescription or letter rather
+        # than a lab report): calling the LLM cannot produce parameters.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "No measurable laboratory values were found in the uploaded "
+                "report. Please upload a lab report containing test results "
+                "with numeric values."
+            ),
         )
 
     target_space = _extract_space_id(settings.HF_SPACE_URL)
@@ -271,50 +379,63 @@ async def analyse_report_text_hf(extracted_text: str) -> Dict[str, Any]:
         )
         return str(result)
 
-    try:
-        raw_output = await asyncio.wait_for(
-            asyncio.to_thread(_call_hf_space),
-            timeout=settings.HF_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "Hugging Face Space timed out after %.1f seconds.", settings.HF_TIMEOUT_SECONDS
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Hugging Face Space ({target_space}) timed out after {settings.HF_TIMEOUT_SECONDS}s. "
-                "The ZeroGPU instance may be warming up. Please retry in a moment."
-            ),
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _http_exception_for_hf_error(exc, target_space) from exc
+    for attempt in (1, 2):
+        try:
+            raw_output = await asyncio.wait_for(
+                asyncio.to_thread(_call_hf_space),
+                timeout=settings.HF_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Hugging Face Space timed out after %.1f seconds.", settings.HF_TIMEOUT_SECONDS
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    f"Hugging Face Space ({target_space}) timed out after {settings.HF_TIMEOUT_SECONDS}s. "
+                    "The ZeroGPU instance may be warming up. Please retry in a moment."
+                ),
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _http_exception_for_hf_error(exc, target_space) from exc
 
-    if not raw_output or not raw_output.strip():
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Hugging Face Space returned empty response content.",
+        if not raw_output or not raw_output.strip():
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Hugging Face Space returned empty response content.",
+            )
+
+        if _is_space_error_payload(raw_output):
+            logger.error("Hugging Face Space returned an error payload (%d chars).", len(raw_output))
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Hugging Face Space returned an error instead of an analysis. "
+                    "The model may still be loading. Please retry in a moment."
+                ),
+            )
+
+        parsed = _parse_qwen_markdown_response(raw_output)
+        if parsed.get("parameters"):
+            logger.info("Received %d chars from Hugging Face Qwen model.", len(raw_output))
+            return parsed
+
+        # Non-empty but unparseable: formatting glitches are often transient,
+        # so retry once before giving up with a 502.
+        logger.warning(
+            "Hugging Face response (%d chars) could not be mapped to laboratory "
+            "parameters (attempt %d/2).",
+            len(raw_output),
+            attempt,
         )
 
-    if _is_space_error_payload(raw_output):
-        logger.error("Hugging Face Space returned an error payload (%d chars).", len(raw_output))
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "Hugging Face Space returned an error instead of an analysis. "
-                "The model may still be loading. Please retry in a moment."
-            ),
-        )
-
-    parsed = _parse_qwen_markdown_response(raw_output)
-    if not parsed.get("parameters"):
-        logger.warning("Hugging Face response could not be mapped to laboratory parameters.")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="AI returned an incomplete or unparseable analysis. Please try again.",
-        )
-
-    logger.info("Received %d chars from Hugging Face Qwen model.", len(raw_output))
-    return parsed
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=(
+            "AI returned an incomplete or unparseable analysis. "
+            "Please try again; if it persists, check that the uploaded "
+            "report is clear and readable."
+        ),
+    )

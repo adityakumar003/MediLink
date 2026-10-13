@@ -1,10 +1,12 @@
 """PDF upload, extraction, and analysis integration tests."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from tests.conftest import auth_headers
+from tests.test_hf_space import MOCK_QWEN_OUTPUT
 
 
 def test_upload_and_analyze_report(client: TestClient, register_user) -> None:
@@ -110,3 +112,57 @@ def test_upload_rejects_fake_image(client: TestClient, register_user) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "The uploaded file is not a valid image file."
+
+
+def test_full_flow_through_mocked_hf_space(client: TestClient, register_user) -> None:
+    """Tomorrow's path: upload -> extract -> HF Space -> validated stored result."""
+    import fitz
+
+    patient = register_user()
+    headers = auth_headers(patient)
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (50, 72),
+        "COMPLETE BLOOD COUNT\nHemoglobin: 10.2 g/dL 12.0-15.5\nGlucose: 110 mg/dL 70-100\n",
+        fontsize=12,
+    )
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    upload = client.post(
+        "/reports/upload",
+        headers=headers,
+        files={"file": ("lab.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload.status_code == 201, upload.text
+    report_id = upload.json()["id"]
+
+    mock_client = MagicMock()
+    mock_client.predict.return_value = MOCK_QWEN_OUTPUT
+    with (
+        patch("app.core.config.settings.AI_MODE", "hf_space"),
+        patch("app.services.hf_space_service.Client", return_value=mock_client),
+    ):
+        analysis = client.post(f"/analysis/{report_id}", headers=headers)
+    assert analysis.status_code == 200, analysis.text
+    assert analysis.json()["status"] == "analyzed"
+
+    result = client.get(f"/analysis/{report_id}", headers=headers)
+    assert result.status_code == 200
+    body = result.json()
+    assert body["summary"]
+    hb = next(p for p in body["parameters"] if "hemoglobin" in p["name"].lower())
+    assert hb["value"] == 10.2
+    assert hb["status"] == "Low"
+    assert body["disease_risks"]["anemia"]["level"] == "Moderate Risk"
+
+    # Re-requesting analysis must NOT call the Space again (quota hygiene).
+    with (
+        patch("app.core.config.settings.AI_MODE", "hf_space"),
+        patch("app.services.hf_space_service.Client", return_value=mock_client) as mock_cls,
+    ):
+        repeat = client.post(f"/analysis/{report_id}", headers=headers)
+    assert repeat.json()["status"] == "analyzed"
+    mock_cls.assert_not_called()

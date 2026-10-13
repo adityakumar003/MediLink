@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from app.services.lab_validation import classify_lab_result
+
 
 _PARAMETER_PATTERN = re.compile(
     r"^(?P<name>[A-Za-z][A-Za-z0-9 ()/%+.-]{1,50}?)\s*[:=-]?\s+"
@@ -38,14 +40,20 @@ def analyse_report_text_offline(extracted_text: str) -> Dict[str, Any]:
         raw_value = match.group("value")
         value: int | float
         value = float(raw_value) if "." in raw_value else int(raw_value)
-        flag = (match.group("flag") or "Unknown").title()
+        flag = (match.group("flag") or "").title()
+        unit = match.group("unit") or ""
+        range_str = match.group("range") or ""
+        # Deterministic Python validation is authoritative: the trailing flag
+        # word printed on the report must not override the numerical check,
+        # and a missing/invalid range yields Unknown (never assumed normal).
+        status = classify_lab_result(f"{raw_value} {unit}".strip(), range_str, flag)
         parameters.append(
             {
                 "name": name,
                 "value": value,
-                "unit": match.group("unit") or "",
-                "status": flag,
-                "reference_range": match.group("range"),
+                "unit": unit,
+                "status": status,
+                "reference_range": range_str or None,
             }
         )
         if len(parameters) >= 40:
