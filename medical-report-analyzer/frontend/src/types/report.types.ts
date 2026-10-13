@@ -1,7 +1,7 @@
 /** src/types/report.types.ts */
 export type ReportStatus = 'uploaded' | 'extracting' | 'extracted' | 'analyzing' | 'analyzed' | 'failed'
 export type RiskLevel = 'Low Risk' | 'Moderate Risk' | 'High Risk' | 'Insufficient Data'
-export type ParamStatus = 'Normal' | 'Low' | 'High' | 'Critical'
+export type ParamStatus = 'Normal' | 'Low' | 'High' | 'Critical' | 'Unknown'
 
 export interface MedicalParameter {
   name: string

@@ -1,8 +1,8 @@
 """
 app/schemas/analysis.py
 ────────────────────────
-Pydantic schemas for the structured analysis result returned by Ollama.
-These match the exact JSON contract that the Ollama prompt produces.
+Pydantic schemas for the structured analysis result returned to the frontend.
+All providers (Hugging Face Space, Ollama, offline) must map to this contract.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ class MedicalParameter(BaseModel):
     name: str
     value: Any                            # can be float or string
     unit: str
-    status: str                           # "Normal" | "Low" | "High" | "Critical"
+    status: str                           # "Normal" | "Low" | "High" | "Critical" | "Unknown"
     reference_range: Optional[str] = None
 
 
@@ -38,8 +38,7 @@ class DiseaseRisks(BaseModel):
 
 class AnalysisResult(BaseModel):
     """
-    Full analysis result — mirrors the exact JSON returned by Ollama.
-    Also returned by GET /analysis/{report_id}.
+    Full analysis result returned by GET /analysis/{report_id}.
     """
     report_id: str
     summary: str

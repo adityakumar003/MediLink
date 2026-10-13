@@ -11,7 +11,7 @@ Imported throughout the backend as:
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,16 +54,31 @@ class Settings(BaseSettings):
         default=30, description="JWT access token lifetime in minutes."
     )
 
-    # ── Ollama AI ───────────────────────────────────────────────────────────
+    # ── AI Inference Provider (Hugging Face / Ollama / Offline) ───────────
+    AI_MODE: str = Field(
+        default="hf_space",
+        description="Analysis provider: hf_space (Hugging Face ZeroGPU Space), ollama, or offline.",
+    )
+    HF_SPACE_URL: str = Field(
+        default="https://huggingface.co/spaces/adityaksingh/MediBridge-qwen",
+        description="Hugging Face Space URL or repo_id for the Qwen medical model.",
+    )
+    HF_TOKEN: Optional[str] = Field(
+        default=None,
+        description="Optional Hugging Face access token for authenticated or private Spaces.",
+    )
+    HF_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        gt=0,
+        description="Maximum wait time for Hugging Face Space response in seconds.",
+    )
+
+    # ── Ollama Local AI (Fallback / Alternative) ──────────────────────────
     OLLAMA_BASE_URL: str = Field(
         default="http://localhost:11434", description="Base URL for local Ollama instance."
     )
     OLLAMA_MODEL: str = Field(
         default="llama3.2:1b", description="Ollama model to use for analysis."
-    )
-    AI_MODE: str = Field(
-        default="offline",
-        description="Analysis provider: offline or ollama.",
     )
     OLLAMA_TIMEOUT_SECONDS: float = Field(
         default=120.0,
@@ -75,8 +90,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_ai_mode(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"offline", "ollama"}:
-            raise ValueError("AI_MODE must be either 'offline' or 'ollama'.")
+        if normalized not in {"hf_space", "offline", "ollama"}:
+            raise ValueError("AI_MODE must be 'hf_space', 'ollama', or 'offline'.")
         return normalized
 
     # ── CORS ───────────────────────────────────────────────────────────────

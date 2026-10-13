@@ -59,8 +59,8 @@ def create_application() -> FastAPI:
     app = FastAPI(
         title="AI-Based Medical Report Analyzer",
         description=(
-            "API for uploading medical PDFs, extracting text, running analysis "
-            "via Ollama AI, and predicting disease risks."
+            "API for uploading medical PDFs and images, extracting text, running "
+            "analysis via a Hugging Face Space (default), optional Ollama, or offline mode."
         ),
         version="0.1.0",
         docs_url="/docs" if not settings.is_production else None,

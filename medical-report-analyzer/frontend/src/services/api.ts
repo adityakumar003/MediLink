@@ -6,7 +6,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '',          // Vite proxy routes API calls to localhost:8000
-  timeout: 300000,      // 5 minutes — Ollama CPU analysis can take a while
+  timeout: 300000,      // 5 minutes — hosted model cold start / queue can take a while
   headers: { 'Content-Type': 'application/json' },
 })
 

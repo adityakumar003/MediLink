@@ -1,105 +1,330 @@
 """
 app/services/text_extraction_service.py
 ────────────────────────────────────────
-PDF text extraction with a pluggable extractor interface.
+PDF and image text extraction with a pluggable extractor strategy.
 
-Phase 1: PyMuPDF (primary) → pdfplumber (fallback).
-Phase 2: PaddleOCR will be added as a third strategy here without changing
-         any route or analysis code.
+Extraction strategies:
+  1. PyMuPDF (fitz) - Primary extractor for digitally generated PDFs with text layer.
+  2. PaddleOCR      - OCR engine for scanned PDF pages and uploaded images.
 
-Public API: extract_text(file_path) -> str
+Public API:
+    extract_text(file_path: str | Path) -> str
+
+Supported formats:
+    • PDF (.pdf) - Digital, scanned, or mixed page PDFs.
+    • Images (.jpg, .jpeg, .png) - Scanned / photo medical documents.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from pathlib import Path
+from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Minimum character count to consider extraction "successful"
-MIN_TEXT_LENGTH = 50
+# ── Constants ──────────────────────────────────────────────────────────────
 
+# Per-page character count threshold to consider a page as having sufficient digital text.
+# Pages with fewer characters are treated as scanned / image-only and sent to PaddleOCR.
+MIN_PAGE_TEXT_LENGTH: int = 40
+
+# Supported image file extensions
+SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png"})
+
+# DPI for rendering PDF pages to image before OCR inference (300 DPI gives clean OCR)
+RENDER_DPI: int = 300
+
+# OCR Engine Singleton
+_ocr_engine: Optional[Any] = None
+_ocr_init_failed: bool = False
+
+
+def get_ocr_engine() -> Optional[Any]:
+    """
+    Return a lazily initialized PaddleOCR singleton.
+    Enforces CPU-only execution and caches the engine instance.
+    Returns None if PaddleOCR is not installed or fails to initialize.
+    """
+    global _ocr_engine, _ocr_init_failed
+
+    if _ocr_engine is not None:
+        return _ocr_engine
+
+    if _ocr_init_failed:
+        return None
+
+    try:
+        from paddleocr import PaddleOCR  # type: ignore[import]
+
+        logger.info("Initializing PaddleOCR engine (lang='en', CPU)...")
+        _ocr_engine = PaddleOCR(
+            use_angle_cls=True,  # Handle rotated/skewed orientation
+            lang="en",           # English recognition model
+            use_gpu=False,       # CPU inference only
+            show_log=False,      # Suppress verbose paddle logging
+        )
+        logger.info("PaddleOCR engine initialized successfully.")
+        return _ocr_engine
+
+    except ImportError:
+        logger.warning(
+            "PaddleOCR or PaddlePaddle is not installed. Scanned PDF & image OCR is unavailable."
+        )
+        _ocr_init_failed = True
+        return None
+    except Exception as exc:
+        logger.error("Failed to initialize PaddleOCR engine: %s", exc)
+        _ocr_init_failed = True
+        return None
+
+
+# ── Public API ─────────────────────────────────────────────────────────────
 
 async def extract_text(file_path: str | Path) -> str:
     """
-    Extract all text from a PDF file.
+    Extract text from a medical report PDF or image file.
 
-    Strategy:
-      1. Try PyMuPDF (fast, accurate for text-layer PDFs).
-      2. If result is empty or below threshold, fallback to pdfplumber.
-      3. If both fail, raise ValueError with a descriptive message.
+    PDF Strategy:
+      1. Use PyMuPDF to extract text page-by-page.
+      2. If a page has insufficient text (< MIN_PAGE_TEXT_LENGTH), render the page
+         to an image and use PaddleOCR to extract text.
+      3. Combine extracted text preserving original page order and layout.
+
+    Image Strategy (.jpg, .jpeg, .png):
+      1. Validate file readability.
+      2. Run PaddleOCR directly.
+      3. Return structured text.
 
     Args:
-        file_path: Path to the PDF file.
+        file_path: Absolute or relative path to PDF or image file.
 
     Returns:
-        Extracted plain text string.
+        Extracted plain text formatted by page.
 
     Raises:
-        ValueError: if extraction fails from both extractors.
-        FileNotFoundError: if the PDF file does not exist.
+        FileNotFoundError: If the target file does not exist.
+        ValueError: If file is empty, corrupted, encrypted, unsupported, or has no extractable text.
     """
     path = Path(file_path)
     if not path.exists():
-        raise FileNotFoundError(f"PDF file not found: {file_path}")
+        raise FileNotFoundError(f"File not found: {file_path}")
 
-    # Try PyMuPDF first
-    try:
-        text = _extract_with_pymupdf(path)
-        if text and len(text.strip()) >= MIN_TEXT_LENGTH:
-            logger.info("PyMuPDF extraction succeeded: %d chars", len(text))
-            return text.strip()
-        logger.warning("PyMuPDF returned insufficient text (%d chars), trying pdfplumber.", len(text))
-    except Exception as exc:
-        logger.warning("PyMuPDF extraction failed: %s — trying pdfplumber.", exc)
+    ext = path.suffix.lower()
 
-    # Fallback to pdfplumber
-    try:
-        text = _extract_with_pdfplumber(path)
-        if text and len(text.strip()) >= MIN_TEXT_LENGTH:
-            logger.info("pdfplumber extraction succeeded: %d chars", len(text))
-            return text.strip()
-        logger.warning("pdfplumber also returned insufficient text (%d chars).", len(text))
-    except Exception as exc:
-        logger.warning("pdfplumber extraction failed: %s", exc)
-
-    # Both failed
-    raise ValueError(
-        "Could not extract meaningful text from the PDF. "
-        "The file may be scanned/image-based. OCR support will be added in Phase 2."
-    )
+    if ext == ".pdf":
+        return await _extract_from_pdf(path)
+    elif ext in SUPPORTED_IMAGE_EXTENSIONS:
+        return _extract_from_image(path)
+    else:
+        raise ValueError(
+            f"Unsupported file format '{ext}'. Accepted formats are PDF (.pdf) and images (.jpg, .jpeg, .png)."
+        )
 
 
-def _extract_with_pymupdf(file_path: Path) -> str:
+# ── PDF Extraction ──────────────────────────────────────────────────────────
+
+async def _extract_from_pdf(path: Path) -> str:
     """
-    Extract text from PDF using PyMuPDF (fitz).
-    Fast and accurate for text-layer PDFs.
+    Extract text from a PDF file using PyMuPDF for digital pages
+    and PaddleOCR for scanned/image pages.
     """
-    import fitz  # PyMuPDF
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as exc:
+        raise ValueError("PyMuPDF is not installed. Run `pip install PyMuPDF`.") from exc
 
-    text_parts = []
-    with fitz.open(str(file_path)) as doc:
+    try:
+        doc = fitz.open(str(path))
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to open PDF file '{path.name}'. The file may be corrupted or invalid: {exc}"
+        ) from exc
+
+    try:
+        if doc.is_encrypted:
+            raise ValueError(f"The PDF file '{path.name}' is password-protected or encrypted.")
+
+        if doc.page_count == 0:
+            raise ValueError(f"The PDF file '{path.name}' contains no pages.")
+
+        page_texts: List[Tuple[int, str]] = []
+
         for page_num, page in enumerate(doc, start=1):
-            page_text = page.get_text("text")
-            if page_text.strip():
-                text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+            digital_text = page.get_text("text") or ""
+            stripped_digital = digital_text.strip()
 
-    return "\n\n".join(text_parts)
+            if len(stripped_digital) >= MIN_PAGE_TEXT_LENGTH:
+                # Digital page with sufficient text
+                page_texts.append((page_num, stripped_digital))
+                logger.info("Page %d: Extracted %d chars via PyMuPDF.", page_num, len(stripped_digital))
+            else:
+                # Page has insufficient text (likely scanned or image-based)
+                logger.info(
+                    "Page %d: Insufficient embedded text (%d chars). Falling back to PaddleOCR...",
+                    page_num,
+                    len(stripped_digital),
+                )
+                ocr_text = _ocr_pdf_page(page, page_num)
+                if ocr_text:
+                    page_texts.append((page_num, ocr_text))
+                    logger.info("Page %d: Extracted %d chars via PaddleOCR.", page_num, len(ocr_text))
+                elif stripped_digital:
+                    # OCR returned nothing, but we had a small amount of digital text; keep it
+                    page_texts.append((page_num, stripped_digital))
+                    logger.info("Page %d: OCR yielded no text; retained %d chars from digital layer.", page_num, len(stripped_digital))
+
+        if not page_texts:
+            raise ValueError(
+                f"Could not extract meaningful text from PDF '{path.name}'. "
+                "The document may be blank, unreadable, or contain unsupported graphics."
+            )
+
+        # Assemble full document text with clear page markers
+        assembled = "\n\n".join(f"--- Page {num} ---\n{text}" for num, text in page_texts)
+        return assembled
+
+    finally:
+        doc.close()
 
 
-def _extract_with_pdfplumber(file_path: Path) -> str:
+def _ocr_pdf_page(page: Any, page_num: int) -> str:
     """
-    Fallback text extraction using pdfplumber.
-    Better at handling tables and complex column layouts.
+    Render a PyMuPDF page to an image and run PaddleOCR text recognition.
     """
-    import pdfplumber
+    engine = get_ocr_engine()
+    if engine is None:
+        logger.warning(
+            "Page %d: PaddleOCR engine unavailable; skipping OCR for scanned page.", page_num
+        )
+        return ""
 
-    text_parts = []
-    with pdfplumber.open(str(file_path)) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+    temp_path: Optional[str] = None
+    try:
+        import fitz
 
-    return "\n\n".join(text_parts)
+        zoom = RENDER_DPI / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+            temp_path = temp_file.name
+
+        pixmap.save(temp_path)
+        return _run_ocr_on_file(temp_path, engine)
+
+    except Exception as exc:
+        logger.warning("OCR processing failed on page %d: %s", page_num, exc)
+        return ""
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+# ── Image Extraction ────────────────────────────────────────────────────────
+
+def _extract_from_image(path: Path) -> str:
+    """
+    Extract text directly from an image file (JPG, JPEG, PNG) using PaddleOCR.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(str(path)) as img:
+            img.verify()
+    except Exception as exc:
+        raise ValueError(f"Unreadable or corrupted image file '{path.name}': {exc}") from exc
+
+    engine = get_ocr_engine()
+    if engine is None:
+        raise ValueError(
+            "PaddleOCR engine is unavailable. "
+            "Install paddlepaddle and paddleocr to process image files."
+        )
+
+    text = _run_ocr_on_file(str(path), engine)
+    if not text:
+        raise ValueError(
+            f"No readable text could be detected in image '{path.name}'. "
+            "Please ensure the image is clear and contains readable text."
+        )
+
+    logger.info("Image '%s': Extracted %d chars via PaddleOCR.", path.name, len(text))
+    return f"--- Page 1 ---\n{text}"
+
+
+# ── OCR Helper & Layout Preservation ────────────────────────────────────────
+
+def _run_ocr_on_file(image_path: str, engine: Any) -> str:
+    """
+    Run PaddleOCR on an image file and return ordered, line-preserved text.
+    Sorts bounding boxes top-to-bottom and left-to-right to preserve
+    table rows, parameters, and clinical reading order.
+    """
+    try:
+        result = engine.ocr(image_path, cls=True)
+    except Exception as exc:
+        logger.warning("PaddleOCR inference error on '%s': %s", image_path, exc)
+        return ""
+
+    if not result or not result[0]:
+        return ""
+
+    detections = []
+    for item in result[0]:
+        try:
+            box = item[0]        # [[x0,y0], [x1,y1], [x2,y2], [x3,y3]]
+            text, score = item[1]
+            text = text.strip()
+            if text:
+                # Compute center y and center x for line sorting
+                ys = [pt[1] for pt in box]
+                xs = [pt[0] for pt in box]
+                cy = sum(ys) / len(ys)
+                cx = sum(xs) / len(xs)
+                height = max(ys) - min(ys)
+                detections.append({
+                    "text": text,
+                    "cx": cx,
+                    "cy": cy,
+                    "height": height,
+                    "score": score,
+                })
+        except (IndexError, TypeError, ValueError):
+            continue
+
+    if not detections:
+        return ""
+
+    # Sort boxes primarily top-to-bottom
+    detections.sort(key=lambda d: d["cy"])
+
+    # Group into lines based on vertical overlap/height tolerance
+    lines: List[List[dict]] = []
+    for det in detections:
+        if not lines:
+            lines.append([det])
+            continue
+
+        last_line = lines[-1]
+        line_avg_cy = sum(d["cy"] for d in last_line) / len(last_line)
+        line_avg_h = sum(d["height"] for d in last_line) / len(last_line)
+        v_tolerance = max(line_avg_h * 0.5, 10.0)
+
+        if abs(det["cy"] - line_avg_cy) <= v_tolerance:
+            last_line.append(det)
+        else:
+            lines.append([det])
+
+    # For each line, sort tokens left-to-right
+    formatted_lines: List[str] = []
+    for line in lines:
+        line.sort(key=lambda d: d["cx"])
+        formatted_lines.append("  ".join(d["text"] for d in line))
+
+    return "\n".join(formatted_lines)

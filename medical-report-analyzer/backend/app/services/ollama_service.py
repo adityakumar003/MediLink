@@ -1,9 +1,10 @@
 """
 app/services/ollama_service.py
 ───────────────────────────────
-Ollama API integration — the ONLY place that calls the local Ollama API.
+Analysis dispatcher plus optional local Ollama client.
 
-Architecture: Routes/Services → analyse_report_text() → Ollama API
+Architecture: Routes → analyse_report_text() → hf_space | ollama | offline
+Ollama is used only when AI_MODE=ollama. Hugging Face failures do not fall back here.
 """
 
 from __future__ import annotations
@@ -25,24 +26,22 @@ logger = logging.getLogger(__name__)
 
 async def analyse_report_text(extracted_text: str) -> Dict[str, Any]:
     """
-    Send extracted medical report text to the local Ollama API and return
-    a structured analysis result as a Python dictionary.
+    Dispatch extracted report text to the configured analysis provider.
 
-    Args:
-        extracted_text: Plain text extracted from the PDF report.
-
-    Returns:
-        Parsed dictionary matching the AnalysisResult schema.
-
-    Raises:
-        HTTPException 503: if the Ollama API call fails.
-        HTTPException 422: if Ollama returns invalid/unparseable JSON.
+    AI_MODE=hf_space (default): Hugging Face Gradio Space (Qwen2.5-3B-Instruct).
+    AI_MODE=ollama: local Ollama /api/generate.
+    AI_MODE=offline: conservative regex extraction without an LLM.
     """
     if not extracted_text or len(extracted_text.strip()) < 50:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Extracted text is too short to analyse. Please upload a valid medical report.",
         )
+
+    if settings.AI_MODE == "hf_space":
+        logger.info("Using Hugging Face Qwen ZeroGPU Space for report analysis.")
+        from app.services.hf_space_service import analyse_report_text_hf
+        return await analyse_report_text_hf(extracted_text)
 
     if settings.AI_MODE == "offline":
         logger.info("Using conservative offline report analysis.")

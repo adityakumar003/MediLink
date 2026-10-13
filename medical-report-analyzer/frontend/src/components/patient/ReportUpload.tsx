@@ -20,9 +20,13 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const allowedTypes = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'])
+
   const handleFile = (f: File) => {
-    if (f.type !== 'application/pdf') {
-      setError('Only PDF files are accepted.')
+    const ext = f.name.split('.').pop()?.toLowerCase()
+    const allowedExt = ext === 'pdf' || ext === 'jpg' || ext === 'jpeg' || ext === 'png'
+    if (!allowedTypes.has(f.type) && !allowedExt) {
+      setError('Only PDF and image files (JPG, JPEG, PNG) are accepted.')
       return
     }
     if (f.size > 10 * 1024 * 1024) {
@@ -61,7 +65,7 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
   return (
     <div className="card">
       <h3 className="font-semibold text-slate-800 mb-1">📄 Upload Medical Report</h3>
-      <p className="text-sm text-slate-500 mb-4">Upload a PDF lab report to get an AI-powered analysis.</p>
+      <p className="text-sm text-slate-500 mb-4">Upload a PDF or image lab report to get an AI-powered analysis.</p>
 
       {/* Drop zone */}
       {stage === 'idle' && (
@@ -77,10 +81,10 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
               d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
           </svg>
           <div className="text-center">
-            <p className="font-medium text-slate-600">Drop your PDF here</p>
-            <p className="text-xs text-slate-400 mt-1">or click to browse — max 10 MB</p>
+            <p className="font-medium text-slate-600">Drop your PDF or image here</p>
+            <p className="text-xs text-slate-400 mt-1">or click to browse — PDF, JPG, PNG — max 10 MB</p>
           </div>
-          <input ref={inputRef} type="file" accept=".pdf,application/pdf" className="sr-only"
+          <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only"
             onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
         </div>
       )}
@@ -103,12 +107,12 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
       {/* Status messages */}
       {stage === 'uploading' && (
         <div className="mt-4 flex items-center gap-3 text-sm text-slate-600">
-          <LoadingSpinner size="sm" /> Uploading PDF…
+          <LoadingSpinner size="sm" /> Uploading report…
         </div>
       )}
       {stage === 'analyzing' && (
         <div className="mt-4 flex items-center gap-3 text-sm text-slate-600">
-          <LoadingSpinner size="sm" /> Running AI analysis (this may take 10–30 seconds)…
+          <LoadingSpinner size="sm" /> Running AI analysis (hosted model may take a minute if it is waking up)…
         </div>
       )}
       {stage === 'done' && (

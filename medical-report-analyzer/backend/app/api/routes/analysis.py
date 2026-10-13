@@ -2,7 +2,7 @@
 app/api/routes/analysis.py
 ───────────────────────────
 Analysis trigger and result retrieval endpoints.
-This route orchestrates: text extraction → Ollama analysis → result storage.
+This route orchestrates: text extraction → configured LLM analysis → result storage.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ async def trigger_analysis(
     """
     Run the full analysis pipeline for a report:
       1. Verify report ownership
-      2. Extract text from PDF (PyMuPDF → pdfplumber fallback)
-      3. Send extracted text to Ollama
+      2. Extract text from PDF/image (PyMuPDF → PaddleOCR for scanned pages)
+      3. Send extracted text to the configured analysis provider
       4. Store the structured result in the MedicalReport document
 
     Returns immediately with status=analyzing; the patient then
@@ -76,7 +76,7 @@ async def trigger_analysis(
             detail=str(exc),
         )
 
-    # ── Step 2: Ollama analysis ───────────────────────────────────────────
+    # ── Step 2: Configured analysis provider ──────────────────────────────
     await update_report_status(report, ReportStatus.ANALYZING)
     try:
         analysis_result = await ollama_service.analyse_report_text(extracted_text)
@@ -89,7 +89,7 @@ async def trigger_analysis(
         await update_report_status(
             report,
             ReportStatus.FAILED,
-            error_message="Ollama analysis failed.",
+            error_message="AI analysis failed.",
         )
         raise
 

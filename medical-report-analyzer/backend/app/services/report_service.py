@@ -4,8 +4,8 @@ app/services/report_service.py
 Business logic for medical report file handling and CRUD operations.
 
 Architecture: Routes → ReportService → Beanie + file_utils
-              ReportService triggers text_extraction_service and ollama_service
-              for analysis.
+              ReportService triggers text_extraction_service and the analysis
+              dispatcher (ollama_service.analyse_report_text) for analysis.
 """
 
 from __future__ import annotations
@@ -47,17 +47,18 @@ async def save_report(file: UploadFile, patient_user: User) -> MedicalReport:
         HTTPException 400: invalid file type or size.
     """
     # Validate file extension
+    ext = Path(file.filename or "").suffix.lower()
     if not validate_file_extension(file.filename or ""):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are accepted. Please upload a .pdf file.",
+            detail="Only PDF and image files (JPG, JPEG, PNG) are accepted.",
         )
 
     # Validate content type
     if not validate_content_type(file.content_type):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only application/pdf is accepted.",
+            detail="Invalid file type. Only application/pdf, image/jpeg, and image/png are accepted.",
         )
 
     # Read content and check size
@@ -70,11 +71,24 @@ async def save_report(file: UploadFile, patient_user: User) -> MedicalReport:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File size exceeds the {settings.MAX_FILE_SIZE_MB} MB limit.",
         )
-    if not content.startswith(b"%PDF-"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The uploaded file is not a valid PDF document.",
-        )
+
+    if ext == ".pdf":
+        if not content.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is not a valid PDF document.",
+            )
+    else:
+        import io
+        from PIL import Image
+        try:
+            with Image.open(io.BytesIO(content)) as img:
+                img.verify()
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is not a valid image file.",
+            )
 
     # Generate unique filename and save to disk
     stored_name = generate_unique_filename(file.filename or "report.pdf")

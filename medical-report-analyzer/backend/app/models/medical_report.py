@@ -2,7 +2,7 @@
 app/models/medical_report.py
 ──────────────────────────────
 Beanie document model for the 'medical_reports' MongoDB collection.
-Stores uploaded PDF metadata, extracted text, and the full Ollama analysis result.
+Stores uploaded PDF/image metadata, extracted text, and the analysis result.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class MedicalReport(Document):
     # Set after text extraction service runs
     extracted_text: Optional[str] = None
 
-    # Set after Ollama service runs — stores the full structured JSON
+    # Set after the analysis provider runs — stores the structured JSON
     analysis_result: Optional[Dict[str, Any]] = None
 
     uploaded_at: datetime = Field(default_factory=utc_now)

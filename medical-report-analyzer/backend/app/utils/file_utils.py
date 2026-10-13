@@ -11,12 +11,17 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-ALLOWED_EXTENSIONS = {".pdf"}
-ALLOWED_CONTENT_TYPES = {"application/pdf"}
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/jpg",
+}
 
 
 def validate_file_extension(filename: str) -> bool:
-    """Return True if the filename has an allowed extension (.pdf only)."""
+    """Return True if the filename has an allowed extension (.pdf, .jpg, .jpeg, .png)."""
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
 
 

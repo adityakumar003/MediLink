@@ -14,6 +14,7 @@ const statusCls: Record<string, string> = {
   Low:      'param-low',
   High:     'param-high',
   Critical: 'param-critical',
+  Unknown:  'text-slate-500',
 }
 
 const statusBadgeCls: Record<string, string> = {
@@ -21,6 +22,7 @@ const statusBadgeCls: Record<string, string> = {
   Low:      'badge bg-blue-100 text-blue-700',
   High:     'badge bg-orange-100 text-orange-700',
   Critical: 'badge bg-red-100 text-red-700',
+  Unknown:  'badge bg-slate-100 text-slate-600',
 }
 
 const ParameterTable: FC<ParameterTableProps> = ({ parameters }) => {
@@ -32,7 +34,8 @@ const ParameterTable: FC<ParameterTableProps> = ({ parameters }) => {
     )
   }
 
-  const abnormal = parameters.filter(p => p.status !== 'Normal')
+  const unclassified = parameters.filter(p => p.status === 'Unknown')
+  const abnormal = parameters.filter(p => p.status !== 'Normal' && p.status !== 'Unknown')
   const normal   = parameters.filter(p => p.status === 'Normal')
 
   return (
@@ -46,11 +49,19 @@ const ParameterTable: FC<ParameterTableProps> = ({ parameters }) => {
         </div>
       )}
       {normal.length > 0 && (
-        <div>
+        <div className={unclassified.length > 0 ? 'mb-3' : ''}>
           <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wide mb-2">
             ✓ Normal Values ({normal.length})
           </p>
           <ParameterRows params={normal} />
+        </div>
+      )}
+      {unclassified.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+            Unclassified ({unclassified.length})
+          </p>
+          <ParameterRows params={unclassified} />
         </div>
       )}
     </div>

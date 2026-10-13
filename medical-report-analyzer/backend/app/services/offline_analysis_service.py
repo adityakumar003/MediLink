@@ -1,4 +1,4 @@
-"""Conservative report analysis used when no Ollama model is configured."""
+"""Conservative report analysis used when AI_MODE=offline."""
 
 from __future__ import annotations
 
