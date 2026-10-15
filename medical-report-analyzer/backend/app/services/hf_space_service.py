@@ -372,7 +372,7 @@ async def analyse_report_text_hf(extracted_text: str) -> Dict[str, Any]:
         client = Client(target_space, token=token)
         result = client.predict(
             report_text=prompt_text,
-            max_new_tokens=1024,
+            max_new_tokens=256,
             temperature=0.2,
             top_p=0.9,
             api_name="/analyze",

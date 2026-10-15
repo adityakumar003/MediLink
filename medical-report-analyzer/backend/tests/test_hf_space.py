@@ -384,7 +384,7 @@ async def test_analyse_report_text_routes_to_hf_space() -> None:
             mock_instance.predict.assert_called_once()
             kwargs = mock_instance.predict.call_args.kwargs
             assert kwargs["api_name"] == "/analyze"
-            assert kwargs["max_new_tokens"] == 1024
+            assert kwargs["max_new_tokens"] == 256
             assert kwargs["temperature"] == 0.2
             assert kwargs["top_p"] == 0.9
             assert "Hemoglobin" in kwargs["report_text"] or "10.2" in kwargs["report_text"]
