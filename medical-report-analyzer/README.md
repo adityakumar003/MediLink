@@ -169,7 +169,8 @@ Copy `backend/.env.example` to `backend/.env`. Never commit `.env` (it is gitign
 | `SECRET_KEY` | ✅ | Secret key for JWT signing — use `openssl rand -hex 32` |
 | `ALGORITHM` | ✅ | JWT algorithm (default: `HS256`) |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | ✅ | Token lifetime in minutes (default: `30`) |
-| `AI_MODE` | ✅ | `hf_space` (default), `ollama`, or `offline`. No silent fallback. |
+| `AI_MODE` | ✅ | `hf_space` (default), `gemini`, `ollama`, or `offline`. No silent fallback. |
+| `ENABLE_LLM_SUMMARY` | ✅ | `true` (default) enables LLM narrative; `false` disables **all** LLM calls and uses the deterministic pipeline with a template summary. |
 | `HF_SPACE_URL` | HF default | `https://huggingface.co/spaces/adityaksingh/MediBridge-qwen` |
 | `HF_TOKEN` | Usually empty | Backend-only. Set only if the Space is private. Never put this in frontend env. |
 | `HF_TIMEOUT_SECONDS` | HF default | Wait time for Space inference (default `120`) |
@@ -315,6 +316,23 @@ For local-only extraction without any LLM:
 AI_MODE=offline
 ```
 
+## ✨ Optional Gemini Setup
+
+Google Gemini can generate the report summary instead of the Hugging Face Space.
+It uses the same response contract: Gemini writes the structured analysis and
+Python still validates every numerical status, so the model cannot override
+validated Low/Normal/High classifications.
+
+```env
+AI_MODE=gemini
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+- Get a key at https://aistudio.google.com/apikey — keep it in backend `.env` only, never in frontend code.
+- Switch back to Hugging Face with one change: `AI_MODE=hf_space`.
+- Gemini failures do **not** silently fall back to another provider.
+
 ## 🧪 Running Tests
 
 ```bash
@@ -322,7 +340,29 @@ cd medical-report-analyzer/backend
 python -m pytest
 ```
 
-Automated tests force `AI_MODE=offline` for upload/history integration and **mock** Hugging Face (`gradio_client`) for provider tests. They do not call the live Space and do not require PaddlePaddle.
+Automated tests force `AI_MODE=offline` for upload/history integration and **mock** Hugging Face (`gradio_client`), Gemini (`google.genai`), and PaddleOCR for provider/extraction tests. They do not call live models and do not require PaddlePaddle.
+
+### PaddleOCR environment note
+
+PaddlePaddle 2.x is incompatible with `protobuf>=4` (`Descriptors cannot be
+created directly`), while `google-genai` requires modern protobuf — so neither
+package version can simply change. The backend therefore forces protobuf's
+pure-Python implementation for the OCR stack in code (`app/main.py`, no action
+needed). If you prefer native speed, the proper fix is migrating to
+PaddlePaddle/PaddleOCR 3.x.
+
+## 🩺 Disease Risk Assessment Engine
+
+Risk cards are produced by a **deterministic backend engine** (`backend/app/services/risk_assessment.py`), not by the LLM and not by a validated clinical risk model:
+
+- Each condition returns an explicit state: `assessed`, `insufficient_data`, `not_assessed`, or `requires_review`.
+- A risk level appears **only** when an adequate marker set supports it; otherwise the card shows the evidence, the missing inputs, the method (if any), and clinician-review guidance.
+- Examples of deliberate restraint: a lone normal creatinine never yields a CKD claim; total cholesterol alone never yields an overall cardiovascular category (no validated calculator is implemented); an abnormal marker yields `requires_review`, never a diagnosis.
+- The LLM (when enabled) only writes the narrative summary from validated results, and a consistency guard replaces summaries that contradict validated abnormal findings. Numerical statuses always come from `lab_validation.py`.
+
+To disable every LLM call (zero API cost/quota): `ENABLE_LLM_SUMMARY=false`. The parameter table, states, and template summary keep working.
+
+> **Clinical validation status:** the engine's rules are evidence-grounded heuristics reviewed against the sample report, covered by unit tests — they are **not** a clinically validated risk model. Formal validation would require a clinician-adjudicated reference set: collect de-identified reports spanning normal/borderline/abnormal/incomplete/noisy cases, have clinicians label the appropriate assessment state per condition, and measure engine agreement before any clinical reliance.
 
 ---
 

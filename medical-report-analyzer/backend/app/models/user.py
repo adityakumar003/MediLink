@@ -29,6 +29,7 @@ class User(Document):
     full_name: str
     role: UserRole
     is_active: bool = True
+    profile_photo: Optional[str] = None  # stored filename under uploads/profile_photos/
     created_at: datetime = Field(default_factory=utc_now)
 
     class Settings:

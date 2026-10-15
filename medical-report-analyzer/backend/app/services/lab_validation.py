@@ -64,9 +64,11 @@ def is_ocr_ambiguous(text: str) -> bool:
         return False
     if _OCR_AMBIGUOUS_RE.search(text):
         return True
-    numbers = _NUMBER_RE.findall(text)
+    # Ignore numbers that belong to recognised units (e.g. the "3" in 10^3/uL).
+    cleaned = _UNIT_RE.sub(" ", text)
+    numbers = _NUMBER_RE.findall(cleaned)
     # A value field with several disconnected numbers is unreliable.
-    if len(numbers) >= 3 and not _INTERVAL_RE.search(text):
+    if len(numbers) >= 3 and not _INTERVAL_RE.search(cleaned):
         return True
     return False
 
@@ -222,6 +224,65 @@ def build_validated_context_block(extracted_text: str) -> str:
     lines.append("Laboratory report text:")
     lines.append(extracted_text)
     return "\n".join(lines)
+
+
+# Canonical test-name aliases: variant substring (lowercase) -> canonical key.
+# Used to match extracted names ("Hb", "FPG", "LDL (Bad) Cholesterol") to the
+# same clinical concept. Original names are always preserved in output.
+# ORDER MATTERS: more specific variants must precede generic ones
+# ("hba1c" before " hb", "ldl"/"hdl" before "cholesterol").
+_TEST_NAME_ALIASES = {
+    "hemoglobin": "hemoglobin",
+    "hgb": "hemoglobin",
+    "hematocrit": "hematocrit",
+    "hct": "hematocrit",
+    "rbc": "rbc",
+    "red blood cell": "rbc",
+    "mcv": "mcv",
+    "mchc": "mchc",
+    "mch": "mch",
+    "rdw": "rdw",
+    "platelet": "platelet",
+    "wbc": "wbc",
+    "white blood": "wbc",
+    "hba1c": "hba1c",
+    "a1c": "hba1c",
+    "fpg": "glucose",
+    "fasting plasma": "glucose",
+    "blood sugar": "glucose",
+    "glucose": "glucose",
+    " hb": "hemoglobin",
+    "creatinine": "creatinine",
+    "egfr": "egfr",
+    "gfr": "egfr",
+    "bun": "bun",
+    "urea": "bun",
+    "uric acid": "uric acid",
+    "albumin-creatinine ratio": "albumin-creatinine ratio",
+    "microalbumin": "albumin-creatinine ratio",
+    "albumin": "albumin",
+    "acr": "albumin-creatinine ratio",
+    "ldl": "ldl cholesterol",
+    "hdl": "hdl cholesterol",
+    "cholesterol": "cholesterol",
+    "triglyceride": "triglycerides",
+    "systolic": "systolic blood pressure",
+    "diastolic": "diastolic blood pressure",
+    "blood pressure": "blood pressure",
+    "vitamin b12": "vitamin b12",
+    "folate": "folate",
+    "ferritin": "ferritin",
+    "iron": "iron",
+}
+
+
+def normalize_test_name(name: str) -> str:
+    """Return the canonical key for a test name variant (lowercase)."""
+    lowered = f" {(name or '').strip().lower()}"
+    for variant, canonical in _TEST_NAME_ALIASES.items():
+        if variant in lowered:
+            return canonical
+    return (name or "").strip().lower()
 
 
 # Aliases used by older tests / hf_space_service.

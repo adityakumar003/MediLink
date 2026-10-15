@@ -9,8 +9,9 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import AuthLayout from '../../layouts/AuthLayout'
 import { useAuth } from '../../hooks/useAuth'
-import { register as apiRegister } from '../../services/authService'
+import { register as apiRegister, uploadProfilePhoto } from '../../services/authService'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
+import Icon from '../../components/common/Icon'
 
 const schema = z.object({
   full_name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -40,12 +41,37 @@ const RegisterPage: FC = () => {
   })
 
   const role = watch('role')
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [photoError, setPhotoError] = useState('')
+
+  const handlePhotoSelect = (file: File | undefined) => {
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/jpg'].includes(file.type)) {
+      setPhotoError('Only JPG or PNG photos are accepted.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setPhotoError('Photo must be under 2 MB.')
+      return
+    }
+    setPhotoError('')
+    if (photoPreview) URL.revokeObjectURL(photoPreview)
+    setPhotoFile(file)
+    setPhotoPreview(URL.createObjectURL(file))
+  }
 
   const onSubmit = async (data: FormData) => {
     setServerError('')
     try {
       const res = await apiRegister(data)
       authLogin(res.access_token, res.user)
+      if (photoFile) {
+        try {
+          await uploadProfilePhoto(photoFile)
+          authLogin(res.access_token, { ...res.user, has_photo: true })
+        } catch { /* photo is optional — continue without it */ }
+      }
       navigate(res.user.role === 'doctor' ? '/doctor/dashboard' : '/patient/dashboard')
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -64,6 +90,31 @@ const RegisterPage: FC = () => {
             {serverError}
           </div>
         )}
+
+        {/* Optional profile photo */}
+        <div className="flex items-center gap-3">
+          {photoPreview ? (
+            <img src={photoPreview} alt="Profile preview"
+              className="w-12 h-12 rounded-full object-cover bg-slate-100" />
+          ) : (
+            <span className="avatar w-12 h-12">
+              <Icon name="user" className="w-5 h-5" />
+            </span>
+          )}
+          <div className="min-w-0">
+            <label className="btn-secondary btn-sm cursor-pointer">
+              {photoFile ? 'Change photo' : 'Add profile photo (optional)'}
+              <input
+                type="file"
+                accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                className="sr-only"
+                onChange={e => handlePhotoSelect(e.target.files?.[0])}
+              />
+            </label>
+            <p className="text-[11px] text-slate-400 mt-1">JPG or PNG, max 2 MB. You can change it later.</p>
+          </div>
+        </div>
+        {photoError && <p className="form-error">{photoError}</p>}
 
         {/* Role selector */}
         <div className="form-group">

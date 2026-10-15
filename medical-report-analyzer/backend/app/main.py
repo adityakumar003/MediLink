@@ -14,6 +14,12 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+import os
+
+# Must precede any google.protobuf import (e.g. via google-genai): the OCR
+# stack (PaddlePaddle 2.x) is incompatible with protobuf>=4's C++ backend.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 

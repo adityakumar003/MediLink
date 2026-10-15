@@ -20,12 +20,19 @@ class MedicalParameter(BaseModel):
     unit: str
     status: str                           # "Normal" | "Low" | "High" | "Critical" | "Unknown"
     reference_range: Optional[str] = None
+    report_flag: Optional[str] = None     # the report's own flag word, if printed
+    flag_mismatch: bool = False           # True when the report flag disagrees with validated status
 
 
 class DiseaseRiskItem(BaseModel):
-    """Risk assessment for a single disease."""
-    level: str                            # "Low Risk" | "Moderate Risk" | "High Risk" | "Insufficient Data"
-    reason: str
+    """Preliminary assessment for a single condition (decision support only)."""
+    level: Optional[str] = None           # "Low Risk" etc. — only when state == "assessed"
+    reason: str = ""
+    state: str = "insufficient_data"      # assessed | insufficient_data | not_assessed | requires_review
+    evidence: List[str] = []
+    missing: List[str] = []
+    method: Optional[str] = None
+    guidance: str = ""
 
 
 class DiseaseRisks(BaseModel):

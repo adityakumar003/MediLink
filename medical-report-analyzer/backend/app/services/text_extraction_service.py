@@ -57,6 +57,15 @@ def get_ocr_engine() -> Optional[Any]:
         return None
 
     try:
+        # PaddlePaddle 2.x ships generated protobuf code incompatible with
+        # protobuf>=4 (raises "Descriptors cannot be created directly").
+        # Downgrading protobuf would break google-genai, so force protobuf's
+        # pure-Python implementation for the OCR stack instead. This affects
+        # only protobuf message parsing (one-time import cost); tensor math
+        # stays native. Proper fix: upgrade to PaddlePaddle/PaddleOCR 3.x.
+        import os as _os
+
+        _os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
         from paddleocr import PaddleOCR  # type: ignore[import]
 
         logger.info("Initializing PaddleOCR engine (lang='en', CPU)...")

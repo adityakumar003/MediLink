@@ -146,10 +146,11 @@ def test_parse_qwen_markdown_response_schema() -> None:
     assert cr["status"] == "Normal"
 
     risks = parsed["disease_risks"]
-    assert risks["diabetes"]["level"] == "Moderate Risk"
-    assert risks["anemia"]["level"] == "Moderate Risk"
-    assert risks["ckd"]["level"] == "Low Risk"
-    assert risks["cardiovascular"]["level"] == "Insufficient Data"
+    assert risks["diabetes"]["state"] == "requires_review"
+    assert risks["diabetes"]["level"] is None
+    assert risks["anemia"]["state"] == "requires_review"
+    assert risks["ckd"]["state"] == "insufficient_data"
+    assert risks["cardiovascular"]["state"] == "insufficient_data"
 
 
 # ── 3. Empty & Short Input Error Handling ──────────────────────────────────
@@ -300,6 +301,39 @@ def test_parse_markdown_table_fallback() -> None:
     hb = next(p for p in parsed["parameters"] if "hemoglobin" in p["name"].lower())
     assert hb["value"] == 10.2
     assert hb["status"] == "Low"
+
+
+# Observed live Space variant: name lives in the "#### Test Name:" heading
+# instead of a "- **Test name**:" bullet.
+HEADING_NAME_QWEN_OUTPUT = """### Laboratory Test Report Analysis
+
+#### Test Name: Fasting Blood Glucose
+- **Reported value and unit**: 108 mg/dL
+- **Reported reference range and unit**: 70 - 99 mg/dL
+- **Classification**: ABOVE RANGE
+
+#### Test Name: Serum Creatinine
+- **Reported value and unit**: 0.9 mg/dL
+- **Reported reference range and unit**: 0.7 - 1.3 mg/dL
+- **Classification**: WITHIN RANGE
+
+### Overall Summary
+Glucose is elevated while kidney function looks normal.
+"""
+
+
+def test_parse_heading_name_variant() -> None:
+    """'#### Test Name: X' headings parse without falling back or 502ing."""
+    parsed = _parse_qwen_markdown_response(HEADING_NAME_QWEN_OUTPUT)
+    assert len(parsed["parameters"]) == 2
+    gl = next(p for p in parsed["parameters"] if "glucose" in p["name"].lower())
+    assert gl["value"] == 108
+    assert gl["status"] == "High"
+    cr = next(p for p in parsed["parameters"] if "creatinine" in p["name"].lower())
+    assert cr["status"] == "Normal"
+    assert parsed["disease_risks"]["diabetes"]["state"] == "requires_review"
+    assert parsed["disease_risks"]["diabetes"]["level"] is None
+    assert parsed["disease_risks"]["ckd"]["state"] == "insufficient_data"
 
 
 @pytest.mark.asyncio

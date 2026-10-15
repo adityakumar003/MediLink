@@ -30,6 +30,11 @@ from app.services.lab_validation import (
     extract_unit,
     parse_numeric_value_and_range as _parse_numeric_value_and_range,
 )
+from app.services.risk_assessment import (
+    derive_disease_risks,
+    ensure_consistent_summary,
+    model_flag_to_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,31 +117,6 @@ def _parse_value_and_unit(val_raw: str) -> tuple[Any, str]:
     return numeric_val, unit
 
 
-def _risk_from_status(
-    param: Optional[Dict[str, Any]],
-    *,
-    missing_reason: str,
-    high_reason: str,
-    low_reason: str,
-    normal_reason: str,
-    high_level: str = "Moderate Risk",
-    low_level: str = "Low Risk",
-) -> Dict[str, str]:
-    if param is None or param.get("status") == "Unknown":
-        return {"level": "Insufficient Data", "reason": missing_reason}
-    st = param["status"]
-    val = param["value"]
-    unit = param["unit"]
-    name = param["name"]
-    if st == "High":
-        return {"level": high_level, "reason": high_reason.format(name=name, val=val, unit=unit)}
-    if st == "Low":
-        return {"level": low_level, "reason": low_reason.format(name=name, val=val, unit=unit)}
-    if st == "Normal":
-        return {"level": "Low Risk", "reason": normal_reason.format(name=name, val=val, unit=unit)}
-    return {"level": "Insufficient Data", "reason": missing_reason}
-
-
 def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
     """
     Parse Qwen markdown into the AnalysisResult schema.
@@ -155,6 +135,12 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
 
     for block in test_blocks:
         name_match = re.search(r"(?:-\s*)?\*\*Test name\*\*:\s*([^\n*]+)", block, re.IGNORECASE)
+        if name_match is None:
+            # Alternate Space format: the test name lives in the section
+            # heading itself, e.g. "#### Test Name: Fasting Blood Glucose".
+            name_match = re.search(
+                r"^\s*Test\s*Name\s*:\s*([^\n*]+)", block, re.IGNORECASE | re.MULTILINE
+            )
         val_match = re.search(r"(?:-\s*)?\*\*Reported value and unit\*\*:\s*([^\n*]+)", block, re.IGNORECASE)
         range_match = re.search(
             r"(?:-\s*)?\*\*Reported reference range and unit\*\*:\s*([^\n*]+)",
@@ -175,6 +161,12 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
         numeric_val, unit = _parse_value_and_unit(val_raw)
         status_flag = classify_lab_result(val_raw, ref_range)
 
+        class_match = re.search(
+            r"(?:-\s*)?\*\*Classification\*\*:\s*([^\n*]+)", block, re.IGNORECASE
+        )
+        model_flag = class_match.group(1).strip() if class_match else None
+        model_status = model_flag_to_status(model_flag or "")
+
         parameters.append(
             {
                 "name": name,
@@ -182,10 +174,10 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
                 "unit": unit,
                 "status": status_flag,
                 "reference_range": ref_range or None,
+                "report_flag": model_flag,
+                "flag_mismatch": bool(model_status) and model_status != status_flag,
             }
         )
-
-    param_map = {p["name"].lower(): p for p in parameters}
 
     if not parameters:
         # The model sometimes abbreviates its answer (summary + consistency
@@ -194,59 +186,18 @@ def _parse_qwen_markdown_response(raw_text: str) -> Dict[str, Any]:
         parameters = _parse_consistency_check_lines(raw_text)
         if not parameters:
             parameters = _parse_markdown_table_rows(raw_text)
-        param_map = {p["name"].lower(): p for p in parameters}
 
-    def find_param(*aliases: str) -> Optional[Dict[str, Any]]:
-        for alias in aliases:
-            for k, p in param_map.items():
-                if alias.lower() in k:
-                    return p
-        return None
+    # Disease assessment is deterministic and shared across providers:
+    # derive_disease_risks never trusts the model's own classifications.
+    disease_risks = derive_disease_risks(parameters)
 
-    glucose_p = find_param("glucose", "fpg", "blood sugar", "hba1c")
-    renal_p = find_param("creatinine", "egfr", "bun", "urea", "uric acid")
-    anemia_p = find_param("hemoglobin", "hb", "hematocrit", "rbc", "iron", "ferritin")
-    cardio_p = find_param("cholesterol", "ldl", "triglyceride", "hdl", "blood pressure")
-
-    diabetes_risk = _risk_from_status(
-        glucose_p,
-        missing_reason="No glucose or HbA1c tests found in the report.",
-        high_reason="{name} ({val} {unit}) is above the reference range printed on the report.",
-        low_reason="{name} ({val} {unit}) is below the reference range printed on the report.",
-        normal_reason="{name} ({val} {unit}) is within the reference range printed on the report.",
-    )
-    ckd_risk = _risk_from_status(
-        renal_p,
-        missing_reason="No renal function indicators (e.g. Creatinine, eGFR, BUN) found in the report.",
-        high_reason="{name} ({val} {unit}) is out of the reference range printed on the report.",
-        low_reason="{name} ({val} {unit}) is out of the reference range printed on the report.",
-        normal_reason="{name} ({val} {unit}) is within the reference range printed on the report.",
-    )
-    anemia_risk = _risk_from_status(
-        anemia_p,
-        missing_reason="No red blood cell or hemoglobin indicators found in the report.",
-        high_reason="{name} ({val} {unit}) is above the reference range printed on the report.",
-        low_reason="{name} ({val} {unit}) is below the reference range printed on the report.",
-        normal_reason="{name} ({val} {unit}) is within the reference range printed on the report.",
-        low_level="Moderate Risk",
-    )
-    cardio_risk = _risk_from_status(
-        cardio_p,
-        missing_reason="No lipid panel or cardiovascular indicators found in the report.",
-        high_reason="{name} ({val} {unit}) is above the reference range printed on the report.",
-        low_reason="{name} ({val} {unit}) is below the reference range printed on the report.",
-        normal_reason="{name} ({val} {unit}) is within the expected limits printed on the report.",
-    )
+    # Guard: an LLM summary must not contradict validated abnormal findings.
+    summary = ensure_consistent_summary(summary, parameters)
 
     return {
         "summary": summary,
         "parameters": parameters,
-        "disease_risks": {
-            "diabetes": diabetes_risk,
-            "ckd": ckd_risk,
-            "anemia": anemia_risk,
-            "cardiovascular": cardio_risk,
-        },
+        "disease_risks": disease_risks,
     }
 
 

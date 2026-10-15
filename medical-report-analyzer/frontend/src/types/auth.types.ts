@@ -6,6 +6,7 @@ export interface AuthUser {
   email: string
   full_name: string
   role: UserRole
+  has_photo?: boolean
 }
 
 export interface AuthContextType {

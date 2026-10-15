@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import secrets
 import string
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 
 from app.core.security import hash_password, verify_password, create_access_token
 from app.models.user import User, UserRole
@@ -121,6 +123,7 @@ async def register_user(payload: RegisterRequest) -> TokenResponse:
             email=user.email,
             full_name=user.full_name,
             role=user.role,
+            has_photo=user.profile_photo is not None,
         ),
     )
 
@@ -162,5 +165,92 @@ async def login_user(payload: LoginRequest) -> TokenResponse:
             email=user.email,
             full_name=user.full_name,
             role=user.role,
+            has_photo=user.profile_photo is not None,
         ),
     )
+
+
+# ── Profile photo ─────────────────────────────────────────────────────────
+
+PROFILE_PHOTO_DIRNAME = "profile_photos"
+PROFILE_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+PROFILE_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024
+
+
+def _profile_photo_dir() -> Path:
+    from app.core.config import settings
+
+    path = Path(settings.UPLOAD_DIR) / PROFILE_PHOTO_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _photo_path(filename: str) -> Path:
+    return _profile_photo_dir() / Path(filename).name
+
+
+async def save_profile_photo(user: User, file: UploadFile) -> str:
+    """
+    Validate and store a profile photo for the authenticated user,
+    replacing any previous one.
+
+    Raises:
+        HTTPException 400: invalid type, size, or unreadable image.
+    """
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in PROFILE_PHOTO_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile photo must be a JPG or PNG image.",
+        )
+    if (file.content_type or "").lower() not in PROFILE_PHOTO_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile photo must be a JPG or PNG image.",
+        )
+
+    content = await file.read()
+    await file.seek(0)
+    if len(content) > MAX_PROFILE_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile photo must be under 2 MB.",
+        )
+
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            img.verify()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file is not a valid image.",
+        )
+
+    if user.profile_photo:
+        try:
+            _photo_path(user.profile_photo).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    stored = f"{uuid4().hex}{ext}"
+    _photo_path(stored).write_bytes(content)
+    user.profile_photo = stored
+    await user.save()
+    logger.info("Profile photo updated for %s", user.email)
+    return stored
+
+
+async def delete_profile_photo(user: User) -> None:
+    """Remove the user's profile photo, reverting to default initials."""
+    if user.profile_photo:
+        try:
+            _photo_path(user.profile_photo).unlink(missing_ok=True)
+        except OSError:
+            pass
+        user.profile_photo = None
+        await user.save()

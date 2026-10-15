@@ -1,6 +1,7 @@
 /** src/types/report.types.ts */
 export type ReportStatus = 'uploaded' | 'extracting' | 'extracted' | 'analyzing' | 'analyzed' | 'failed'
 export type RiskLevel = 'Low Risk' | 'Moderate Risk' | 'High Risk' | 'Insufficient Data'
+export type AssessmentState = 'assessed' | 'insufficient_data' | 'not_assessed' | 'requires_review'
 export type ParamStatus = 'Normal' | 'Low' | 'High' | 'Critical' | 'Unknown'
 
 export interface MedicalParameter {
@@ -9,11 +10,18 @@ export interface MedicalParameter {
   unit: string
   status: ParamStatus
   reference_range?: string
+  report_flag?: string
+  flag_mismatch?: boolean
 }
 
 export interface DiseaseRiskItem {
-  level: RiskLevel
+  level: RiskLevel | null
   reason: string
+  state: AssessmentState
+  evidence: string[]
+  missing: string[]
+  method?: string
+  guidance: string
 }
 
 export interface DiseaseRisks {

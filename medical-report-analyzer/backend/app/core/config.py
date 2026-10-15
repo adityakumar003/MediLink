@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # ── AI Inference Provider (Hugging Face / Ollama / Offline) ───────────
     AI_MODE: str = Field(
         default="hf_space",
-        description="Analysis provider: hf_space (Hugging Face ZeroGPU Space), ollama, or offline.",
+        description="Analysis provider: hf_space (Hugging Face ZeroGPU Space), gemini, ollama, or offline.",
     )
     HF_SPACE_URL: str = Field(
         default="https://huggingface.co/spaces/adityaksingh/MediBridge-qwen",
@@ -71,6 +71,26 @@ class Settings(BaseSettings):
         default=120.0,
         gt=0,
         description="Maximum wait time for Hugging Face Space response in seconds.",
+    )
+
+    # ── Google Gemini (Optional Summary Provider) ──────────────────────────
+    GEMINI_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Google Gemini API key. Required only when AI_MODE=gemini.",
+    )
+    GEMINI_MODEL: str = Field(
+        default="gemini-3.5-flash-lite",
+        description="Gemini model name for report analysis.",
+    )
+    GEMINI_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        gt=0,
+        description="Maximum wait time for a Gemini response in seconds.",
+    )
+    ENABLE_LLM_SUMMARY: bool = Field(
+        default=True,
+        description="When false, no LLM generation (HF/Gemini/Ollama) is triggered; "
+        "analysis uses the deterministic local pipeline with a template summary.",
     )
 
     # ── Ollama Local AI (Fallback / Alternative) ──────────────────────────
@@ -90,8 +110,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_ai_mode(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"hf_space", "offline", "ollama"}:
-            raise ValueError("AI_MODE must be 'hf_space', 'ollama', or 'offline'.")
+        if normalized not in {"hf_space", "gemini", "offline", "ollama"}:
+            raise ValueError("AI_MODE must be 'hf_space', 'gemini', 'ollama', or 'offline'.")
         return normalized
 
     # ── CORS ───────────────────────────────────────────────────────────────

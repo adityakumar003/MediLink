@@ -231,3 +231,40 @@ async def get_patient_report_for_doctor(
         error_message=report.error_message,
         has_analysis=report.analysis_result is not None,
     )
+
+
+async def delete_report(report_id: str, patient_user_id: str) -> dict:
+    """
+    Delete a failed report and its stored file, verifying patient ownership.
+
+    Only reports with status FAILED can be deleted, so successfully
+    analysed medical data is never removed by accident.
+
+    Raises:
+        HTTPException 404: if report not found.
+        HTTPException 403: if the authenticated patient does not own it.
+        HTTPException 409: if the report is not in failed status.
+    """
+    report = await MedicalReport.get(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    await report.fetch_link(MedicalReport.patient)
+    patient: User = report.patient  # type: ignore[assignment]
+    if str(patient.id) != patient_user_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    if report.status != ReportStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed reports can be deleted.",
+        )
+
+    try:
+        Path(report.file_path).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove stored file for report %s", report_id)
+
+    await report.delete()
+    logger.info("Deleted failed report %s", report_id)
+    return {"message": "Report deleted.", "id": report_id}

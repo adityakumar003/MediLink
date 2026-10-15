@@ -76,6 +76,7 @@ class UserInfo(BaseModel):
     email: str
     full_name: str
     role: UserRole
+    has_photo: bool = False
 
 
 class TokenResponse(BaseModel):
@@ -92,3 +93,4 @@ class MeResponse(BaseModel):
     full_name: str
     role: UserRole
     is_active: bool
+    has_photo: bool = False

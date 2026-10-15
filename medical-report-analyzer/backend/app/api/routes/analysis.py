@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.analysis import AnalysisResult, AnalysisTriggerResponse, DiseaseRisks, DiseaseRiskItem, MedicalParameter
 from app.services import ollama_service, report_service, text_extraction_service
 from app.services.report_service import update_report_status
+from app.services.risk_assessment import legacy_risk_item
 from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -142,25 +143,15 @@ async def get_analysis_results(
 
     raw = report.analysis_result
 
-    # Build the typed AnalysisResult from the stored dict
+    # Build the typed AnalysisResult from the stored dict.
+    # Legacy reports (pre-assessment-states) only carry level/reason;
+    # legacy_risk_item maps them compatibly.
     disease_risks_raw = raw.get("disease_risks", {})
     disease_risks = DiseaseRisks(
-        diabetes=DiseaseRiskItem(
-            level=disease_risks_raw.get("diabetes", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("diabetes", {}).get("reason", ""),
-        ),
-        ckd=DiseaseRiskItem(
-            level=disease_risks_raw.get("ckd", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("ckd", {}).get("reason", ""),
-        ),
-        anemia=DiseaseRiskItem(
-            level=disease_risks_raw.get("anemia", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("anemia", {}).get("reason", ""),
-        ),
-        cardiovascular=DiseaseRiskItem(
-            level=disease_risks_raw.get("cardiovascular", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("cardiovascular", {}).get("reason", ""),
-        ),
+        diabetes=DiseaseRiskItem(**legacy_risk_item("diabetes", disease_risks_raw)),
+        ckd=DiseaseRiskItem(**legacy_risk_item("ckd", disease_risks_raw)),
+        anemia=DiseaseRiskItem(**legacy_risk_item("anemia", disease_risks_raw)),
+        cardiovascular=DiseaseRiskItem(**legacy_risk_item("cardiovascular", disease_risks_raw)),
     )
 
     parameters = [
