@@ -37,6 +37,16 @@ SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png"}
 # DPI for rendering PDF pages to image before OCR inference (300 DPI gives clean OCR)
 RENDER_DPI: int = 300
 
+# PaddleOCR leaves small text on the table unless detection keeps native detail:
+# the default limit (960 px) downscales typical 300-DPI scans. 1920 preserves it.
+OCR_DET_LIMIT_SIDE_LEN: int = 1920
+OCR_DET_LIMIT_TYPE: str = "max"
+# Keep faint / low-contrast text instead of discarding it as low confidence.
+OCR_DROP_SCORE: float = 0.3
+OCR_DET_BOX_THRESH: float = 0.3
+# Upscale small scans before OCR so small table text stays legible.
+OCR_MIN_WIDTH: int = 1600
+
 # OCR Engine Singleton
 _ocr_engine: Optional[Any] = None
 _ocr_init_failed: bool = False
@@ -74,6 +84,10 @@ def get_ocr_engine() -> Optional[Any]:
             lang="en",           # English recognition model
             use_gpu=False,       # CPU inference only
             show_log=False,      # Suppress verbose paddle logging
+            det_limit_side_len=OCR_DET_LIMIT_SIDE_LEN,
+            det_limit_type=OCR_DET_LIMIT_TYPE,
+            drop_score=OCR_DROP_SCORE,
+            det_db_box_thresh=OCR_DET_BOX_THRESH,
         )
         logger.info("PaddleOCR engine initialized successfully.")
         return _ocr_engine
@@ -269,17 +283,80 @@ def _extract_from_image(path: Path) -> str:
 
 # ── OCR Helper & Layout Preservation ────────────────────────────────────────
 
+def _prepare_ocr_image(image_path: str) -> Optional[str]:
+    """
+    Return a temporary enhanced copy of an image for OCR, or None.
+
+    Low-resolution, low-contrast, and blurry scans lose small table text:
+      1. Upscale narrow images to OCR_MIN_WIDTH so small glyphs stay legible.
+      2. Normalise contrast (CLAHE when OpenCV is available) and sharpen.
+
+    The caller owns the returned file and must delete it.
+    """
+    temp_path: Optional[str] = None
+    try:
+        from PIL import Image, ImageFilter, ImageOps
+
+        with Image.open(image_path) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+
+            if image.width < OCR_MIN_WIDTH:
+                scale = OCR_MIN_WIDTH / float(image.width)
+                new_size = (
+                    int(round(image.width * scale)),
+                    int(round(image.height * scale)),
+                )
+                image = image.resize(new_size, Image.LANCZOS)
+
+            try:
+                import cv2  # Installed with PaddleOCR; optional for preprocessing.
+                import numpy as np
+
+                gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+                gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+                blurred = cv2.GaussianBlur(gray, (0, 0), 3.0)
+                enhanced = cv2.addWeighted(gray, 1.5, blurred, -0.5, 0)
+                output = Image.fromarray(enhanced)
+            except Exception:
+                output = ImageOps.autocontrast(image.convert("L"))
+                output = output.filter(
+                    ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3)
+                )
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+            temp_path = temp_file.name
+        output.save(temp_path, "PNG")
+        return temp_path
+
+    except Exception as exc:
+        logger.debug("Image preprocessing skipped for '%s': %s", image_path, exc)
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return None
+
+
 def _run_ocr_on_file(image_path: str, engine: Any) -> str:
     """
     Run PaddleOCR on an image file and return ordered, line-preserved text.
     Sorts bounding boxes top-to-bottom and left-to-right to preserve
     table rows, parameters, and clinical reading order.
     """
+    prepared_path = _prepare_ocr_image(image_path)
+    ocr_path = prepared_path or image_path
     try:
-        result = engine.ocr(image_path, cls=True)
+        result = engine.ocr(ocr_path, cls=True)
     except Exception as exc:
         logger.warning("PaddleOCR inference error on '%s': %s", image_path, exc)
         return ""
+    finally:
+        if prepared_path and os.path.exists(prepared_path):
+            try:
+                os.remove(prepared_path)
+            except OSError:
+                pass
 
     if not result or not result[0]:
         return ""

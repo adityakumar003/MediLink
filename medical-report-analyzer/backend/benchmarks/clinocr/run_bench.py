@@ -134,10 +134,17 @@ def materialize_image(row: Dict[str, Any]) -> Path:
 # ── OCR ─────────────────────────────────────────────────────────────────────
 
 async def ocr_document(row: Dict[str, Any], force: bool) -> Tuple[str, float, Optional[str]]:
-    """Return (ocr_text, seconds, error). Reuses the per-doc OCR cache."""
+    """Return (ocr_text, seconds, error). Reuses the per-doc OCR cache.
+
+    Only successful, non-empty results are cached; failures are retried on the
+    next run so the error is recorded every time (never masked as a success).
+    """
     cache_path = OCR_DIR / f"{row['doc_id']}.txt"
     if cache_path.exists() and not force:
-        return cache_path.read_text(encoding="utf-8"), 0.0, None
+        cached = cache_path.read_text(encoding="utf-8")
+        if cached.strip():
+            return cached, 0.0, None
+        cache_path.unlink()  # stale empty cache from an earlier failed run
 
     started = time.perf_counter()
     error: Optional[str] = None
@@ -148,8 +155,9 @@ async def ocr_document(row: Dict[str, Any], force: bool) -> Tuple[str, float, Op
         text, error = "", f"{type(exc).__name__}: {exc}"
 
     elapsed = time.perf_counter() - started
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(text, encoding="utf-8")
+    if text.strip():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(text, encoding="utf-8")
     return text, elapsed, error
 
 
@@ -200,15 +208,18 @@ def score_document(
         rows_matched = len(params["value_matched"])
         rows_extracted = params["copies"]
         rows_reference = params["reference_count"]
-        status_matched = len(params["status_matched"])
-        status_denominator = sum(
-            1 for key in params["value_matched"]
-            if str(next(
-                (p.get("status") for p in ref_params
-                 if ev.normalize_test_name(str(p.get("name", ""))) == key),
-                "",
-            )).strip()
-        )
+        ref_map = ev.param_map(ref_params)
+        ocr_map = ev.param_map(ocr_params)
+        # Status agreement only where the ground truth has a definite status;
+        # "Unknown" (a column-alignment artifact) must not count as a
+        # disagreement.
+        status_matched = status_denominator = 0
+        for key in params["value_matched"]:
+            reference_status = ev.status_of(ref_map.get(key))
+            if reference_status in {"low", "normal", "high", "critical"}:
+                status_denominator += 1
+                if ev.status_of(ocr_map.get(key)) == reference_status:
+                    status_matched += 1
         missing_rows = params["missing"][:5]
         value_mismatches = params["value_bad_details"][:5]
     else:
@@ -353,6 +364,7 @@ def build_markdown(
     by_subset: Dict[str, Dict[str, Any]],
     by_template: Dict[int, Dict[str, Any]],
     overall: Dict[str, Any],
+    print_only_stats: Dict[str, Any],
     elapsed: float,
 ) -> str:
     generated = time.strftime("%Y-%m-%d %H:%M")
@@ -377,6 +389,11 @@ def build_markdown(
         f"- **Numeric literals recovered: {pct(overall['numbers_recall'])}** "
         f"({overall['numbers_matched']}/{overall['numbers_reference']}, "
         f"F1 {pct(overall['numbers_f1'])}).",
+        f"- **Print-only accuracy (handwriting excluded): "
+        f"{pct(print_only_stats['word_content_f1'])}** word content F1 / "
+        f"{pct(print_only_stats['character_accuracy'])} strict / "
+        f"{pct(print_only_stats['numbers_recall'])} of numbers "
+        f"({print_only_stats['documents']} documents).",
         f"- **Key-level lab rows recovered: {pct(overall['rows_recall'])}** "
         f"({overall['rows_matched']}/{overall['rows_reference']}, "
         f"precision {pct(overall['rows_precision'])}, F1 {pct(overall['rows_f1'])}) "
@@ -389,6 +406,13 @@ def build_markdown(
         "headers, so OCR merges columns and pays an order penalty that the",
         "order-free word-content metric excludes. Both are reported.",
         "",
+        "Status agreement is n/a here: these column tables keep value / flag /",
+        "site on separate lines, so the deterministic parser (built for",
+        "single-line lab rows) cannot pair a value with its range even in the",
+        "ground-truth text, leaving no value-matched row with a definite",
+        "reference status. Status handling is covered by the internal gold",
+        "fixtures instead (see backend/tools/eval_report.md).",
+        "",
         "## By acquisition condition",
         "",
         "| Subset | Docs | Char accuracy | Word content F1 | Number recall | "
@@ -398,6 +422,7 @@ def build_markdown(
     for subset in SUBSETS:
         if subset in by_subset:
             lines.append(summary_row(subset, by_subset[subset]))
+    lines.append(summary_row("**Print-only (no handwriting)**", print_only_stats))
     lines.append(summary_row("**All**", overall))
 
     lines.extend([
@@ -452,8 +477,12 @@ def build_markdown(
         "  and the OCR text; a row counts only when the canonical test name matches",
         "  and the value is within max(0.01, 0.5%) of the reference value.",
         "  Scored only on numeric lab panels (t11/t12/t15); pathology reports are",
-        "  narrative and would only contribute header-number false positives.",
-        "- **Status agreement** is computed among value-matched rows only.",
+        "  narrative. Note: these synthetic tables place value / flag / previous",
+        "  result / site in separate columns, a layout the offline parser (built",
+        "  for single-line Indian lab rows) misreads even on perfect ground-truth",
+        "  text -- so this is an end-to-end pipeline figure, not pure OCR quality.",
+        "- **Status agreement** is computed among value-matched rows whose ground",
+        "  truth status is Low/Normal/High/Critical (Unknown is excluded).",
         "",
     ])
     return "\n".join(lines)
@@ -501,8 +530,13 @@ def main() -> None:
         by_template_groups[doc["template"]].append(doc)
     by_template = {template: aggregate(docs) for template, docs in by_template_groups.items()}
     overall = aggregate(results)
+    print_only_stats = aggregate(
+        doc for doc in results if doc["subset"] != "handwriting"
+    )
 
-    markdown = build_markdown(results, by_subset, by_template, overall, elapsed)
+    markdown = build_markdown(
+        results, by_subset, by_template, overall, print_only_stats, elapsed
+    )
     RESULTS_MD.write_text(markdown, encoding="utf-8")
     RESULTS_JSON.write_text(
         json.dumps(
@@ -513,6 +547,7 @@ def main() -> None:
                 "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "runtime_seconds": round(elapsed, 1),
                 "overall": overall,
+                "print_only": print_only_stats,
                 "by_subset": by_subset,
                 "by_template": by_template,
                 "documents": results,

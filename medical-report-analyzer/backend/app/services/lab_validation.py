@@ -23,7 +23,7 @@ _OCR_AMBIGUOUS_RE = re.compile(
 )
 _UNIT_RE = re.compile(
     r"(g/dl|mg/dl|mmol/l|µiu/ml|uiu/ml|iu/l|u/l|ng/ml|pg/ml|%"
-    r"|10\^3/?[µu]l|10\^9/l|fl|pg|mmhg|/µl|/ul|meq/l|ml/min)",
+    r"|10\^3/?[µu]l|10\^6/?[µu]l|10\^9/l|fl|pg|mmhg|/µl|/ul|meq/l|ml/min)",
     re.IGNORECASE,
 )
 

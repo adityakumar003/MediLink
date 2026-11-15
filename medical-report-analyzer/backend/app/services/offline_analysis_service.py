@@ -36,9 +36,71 @@ _TRAILING_FLAG_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_VALUE_RE = re.compile(
-    r"^(?P<value>-?\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z/%^0-9.µu-]{0,12})$",
+    r"^(?P<value>-?\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>[A-Za-z/%^0-9.µu-]{0,12})"
+    r"(?P<rest>.*)$",
     re.IGNORECASE,
 )
+# OCR merges table columns into one value line, e.g.
+# "11.4x10/L  H  4.5-11.0  TB". These helpers recover the range and flag.
+_MERGED_FLAG_RE = re.compile(
+    r"\b(high|low|normal|critical|abnormal|borderline|h|l)\b",
+    re.IGNORECASE,
+)
+_MERGED_RANGE_RE = re.compile(
+    r"(?:[<>≤≥]\s*-?\d+(?:\.\d+)?"
+    r"|-?\d+(?:\.\d+)?\s*[-–—]\s*-?\d+(?:\.\d+)?)"
+)
+_SUPERSCRIPT_TRANSLATION = str.maketrans(
+    {
+        "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+        "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "×": "x",
+    }
+)
+
+
+def _normalise_superscripts(text: str) -> str:
+    """Convert unit superscripts (x10³/µL) into plain digits (x10^3/µL)."""
+    return (text or "").translate(_SUPERSCRIPT_TRANSLATION)
+
+
+def _range_and_flag_from_rest(rest: str, value_str: str) -> tuple[str, str]:
+    """
+    Recover (reference_range, flag) from trailing text on a merged OCR line.
+
+    Flagged rows (H/L) are accepted directly. Unflagged rows (normal results)
+    are accepted only when the value falls inside the printed range, which
+    rejects phone numbers and dates masquerading as ranges.
+    """
+    if not rest or not re.search(r"\d", rest):
+        return "", ""
+    range_match = _MERGED_RANGE_RE.search(rest)
+    if not range_match:
+        return "", ""
+    candidate = range_match.group(0)
+    value_num, low, high = _parse_bounds(value_str, candidate)
+    if low is None and high is None:
+        return "", ""
+    if low is not None and high is not None and low > high:
+        return "", ""
+
+    flag_match = _MERGED_FLAG_RE.search(rest)
+    if flag_match:
+        flag = flag_match.group(1).title()
+        if flag.upper() == "H":
+            flag = "High"
+        elif flag.upper() == "L":
+            flag = "Low"
+        return candidate, flag
+
+    if value_num is None:
+        return "", ""
+    if low is not None and value_num < low:
+        return "", ""
+    if high is not None and value_num > high:
+        return "", ""
+    return candidate, ""
+
 _TRAILING_PREPOSITION_RE = re.compile(
     r"\s+(at|of|is|was|are|were|with|and|in|on|for|to)$",
     re.IGNORECASE,
@@ -107,18 +169,33 @@ def _extract_table_rows(lines: List[str]) -> List[Dict[str, Any]]:
 
         raw_value = value_match.group("value")
         unit = (value_match.group("unit") or "").strip()
-        range_candidate, flag = "", ""
-        for extra in following[1:3]:
-            # A line is a range only if it yields real bounds for this value;
-            # unit-only lines (e.g. "10^3/uL") contain digits but no bounds.
-            _, low, high = _parse_bounds(f"{raw_value} {unit}".strip(), extra)
-            if low is not None or high is not None:
-                range_candidate, flag = _clean_range_candidate(extra)
-                if not unit:
-                    unit = extract_unit(extra)
-                break
-            if not unit and extract_unit(extra):
-                unit = extra.strip()
+        rest = (value_match.group("rest") or "").strip()
+        if unit and not re.search(r"[A-Za-zµ%]", unit):
+            # A digits/dashes-only token is another number (phone, date),
+            # not a unit.
+            i += 1
+            continue
+        value_str_so_far = f"{raw_value} {unit}".strip()
+
+        # Merged OCR table line: value + unit + flag + range + site.
+        range_candidate, flag = _range_and_flag_from_rest(rest, value_str_so_far)
+        if not range_candidate and re.search(r"\d", rest):
+            # Extra unexplained numbers on the value line: not a clean row.
+            i += 1
+            continue
+
+        if not range_candidate and not rest:
+            for extra in following[1:3]:
+                # A line is a range only if it yields real bounds for this value;
+                # unit-only lines (e.g. "10^3/uL") contain digits but no bounds.
+                _, low, high = _parse_bounds(value_str_so_far, extra)
+                if low is not None or high is not None:
+                    range_candidate, flag = _clean_range_candidate(extra)
+                    if not unit:
+                        unit = extract_unit(extra)
+                    break
+                if not unit and extract_unit(extra):
+                    unit = extra.strip()
         try:
             value: int | float = float(raw_value) if "." in raw_value else int(raw_value)
         except ValueError:
@@ -143,7 +220,10 @@ def _extract_table_rows(lines: List[str]) -> List[Dict[str, Any]]:
         )
         if len(rows) >= _MAX_PARAMETERS:
             break
-        i = j
+        # Advance one line only: the value/range lines contain digits and are
+        # skipped naturally, while consecutive rows (merged OCR layouts) are
+        # still parsed instead of being swallowed by the look-ahead window.
+        i += 1
     return rows
 
 
@@ -175,7 +255,7 @@ def _clean_range_candidate(rest: str) -> tuple[str, str]:
 
 
 def _extract_parameters(extracted_text: str) -> List[Dict[str, Any]]:
-    lines = extracted_text.splitlines()
+    lines = _normalise_superscripts(extracted_text).splitlines()
     # Column-style tables first (authoritative); single-line rows fill gaps.
     parameters: List[Dict[str, Any]] = _extract_table_rows(lines)
     seen = {p["name"].lower() for p in parameters}
