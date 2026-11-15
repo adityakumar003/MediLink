@@ -15,6 +15,7 @@ const NAV: { label: string; path: string; icon: IconName }[] = [
   { label: 'History', path: '/patient/history', icon: 'clock' },
   { label: 'Analytics', path: '/patient/analytics', icon: 'trendingUp' },
   { label: 'Chats', path: '/patient/chats', icon: 'chat' },
+  { label: 'Video', path: '/patient/consultations', icon: 'video' },
 ]
 
 interface PatientLayoutProps { children: ReactNode }

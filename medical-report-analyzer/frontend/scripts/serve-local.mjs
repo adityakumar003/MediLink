@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 const timeout = 300000
 const outDir = 'dist'
 const proxy = Object.fromEntries(
-  ['/auth', '/doctors', '/patients', '/reports', '/analysis', '/health'].map((path) => [
+  ['/auth', '/doctors', '/patients', '/reports', '/analysis', '/video', '/health'].map((path) => [
     path,
     {
       target: 'http://localhost:8000',

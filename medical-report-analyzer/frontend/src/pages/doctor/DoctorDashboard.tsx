@@ -25,10 +25,12 @@ import { AvatarWithUpload } from '../../components/common/Avatar'
 import ParameterTrend from '../../components/analytics/ParameterTrend'
 import { buildTrends } from '../../components/analytics/trends'
 import { getPatientReports } from '../../services/doctorService'
+import { startConsultation } from '../../services/videoService'
 import { getAnalysis } from '../../services/reportService'
 import type { AnalysisResult } from '../../types/report.types'
+import VideoConsultations from '../../components/video/VideoConsultations'
 
-export type DoctorSection = 'overview' | 'requests' | 'patients' | 'analytics'
+export type DoctorSection = 'overview' | 'requests' | 'patients' | 'analytics' | 'consultations'
 
 interface DoctorDashboardProps {
   section: DoctorSection
@@ -51,6 +53,8 @@ const DoctorDashboard: FC<DoctorDashboardProps> = ({ section }) => {
   const [trendAnalyses, setTrendAnalyses] = useState<AnalysisResult[]>([])
   const [loadingTrends, setLoadingTrends] = useState(false)
   const [patientView, setPatientView] = useState<'reports' | 'chat'>('reports')
+  const [startingVideo, setStartingVideo] = useState(false)
+  const [videoError, setVideoError] = useState('')
 
   const handlePhotoChanged = (hasPhoto: boolean) => {
     setPhotoKey(k => k + 1)
@@ -138,8 +142,23 @@ const DoctorDashboard: FC<DoctorDashboardProps> = ({ section }) => {
     if (section === 'patients') {
       setSelectedPatient(p)
       setPatientView('reports')
+      setVideoError('')
     } else {
       navigate('/doctor/patients', { state: { patientId: id } })
+    }
+  }
+
+  const handleStartVideo = async (patientId: string) => {
+    setStartingVideo(true)
+    setVideoError('')
+    try {
+      const consultation = await startConsultation(patientId)
+      navigate(`/consultation/${consultation.id}`)
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setVideoError(detail || 'Could not start the video consultation.')
+    } finally {
+      setStartingVideo(false)
     }
   }
 
@@ -200,8 +219,9 @@ const DoctorDashboard: FC<DoctorDashboardProps> = ({ section }) => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              {/* Profile */}
-              <div className="lg:col-span-1">
+              {/* Profile + active video calls */}
+              <div className="lg:col-span-1 flex flex-col gap-4">
+                <VideoConsultations role="doctor" patients={patients} compact />
                 <div className="card">
                   <h3 className="font-semibold text-slate-800 mb-4">My Profile</h3>
                   {profile && (
@@ -317,15 +337,33 @@ const DoctorDashboard: FC<DoctorDashboardProps> = ({ section }) => {
             <div className="lg:col-span-3 card">
               {selectedPatient ? (
                 <div className="flex flex-col gap-4">
-                  <div className="flex gap-1 bg-slate-100 p-1 rounded-full w-fit">
-                    {(['reports', 'chat'] as const).map(tab => (
-                      <button key={tab} onClick={() => setPatientView(tab)}
-                        className={`px-4 py-1.5 rounded-full text-xs font-semibold capitalize transition-all
-                          ${patientView === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                        {tab}
-                      </button>
-                    ))}
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex gap-1 bg-slate-100 p-1 rounded-full w-fit">
+                      {(['reports', 'chat'] as const).map(tab => (
+                        <button key={tab} onClick={() => setPatientView(tab)}
+                          className={`px-4 py-1.5 rounded-full text-xs font-semibold capitalize transition-all
+                            ${patientView === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                          {tab}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => handleStartVideo(selectedPatient.user_id)}
+                      disabled={startingVideo}
+                      className="btn-primary btn-sm"
+                    >
+                      {startingVideo
+                        ? <LoadingSpinner size="sm" />
+                        : <Icon name="video" className="w-4 h-4" />}
+                      Start video
+                    </button>
                   </div>
+                  {videoError && (
+                    <div className="alert-error">
+                      <Icon name="alert" className="w-5 h-5" />
+                      <p>{videoError}</p>
+                    </div>
+                  )}
                   {patientView === 'reports' ? (
                     <PatientReportView
                       patientId={selectedPatient.user_id}
@@ -346,6 +384,19 @@ const DoctorDashboard: FC<DoctorDashboardProps> = ({ section }) => {
             </div>
           </div>
         )}
+        {/* ── VIDEO CONSULTATIONS ── */}
+        {section === 'consultations' && (
+          <div>
+            <div className="mb-5">
+              <h1 className="page-title">Video Consultations</h1>
+              <p className="page-sub">
+                Start an on-demand call or schedule one with a connected patient.
+              </p>
+            </div>
+            <VideoConsultations role="doctor" patients={patients} />
+          </div>
+        )}
+
         {/* ── ANALYTICS ── */}
         {section === 'analytics' && (
           <div>

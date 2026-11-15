@@ -4,8 +4,16 @@
  */
 import axios from 'axios'
 
+// Empty by default: Vite's dev proxy routes same-origin API calls to the
+// backend. Deployments with a separate API origin can set VITE_API_URL.
+const configuredBaseUrl = (
+  import.meta.env.VITE_API_URL
+  || import.meta.env.VITE_API_BASE_URL
+  || ''
+).trim().replace(/\/+$/, '')
+
 const api = axios.create({
-  baseURL: '',          // Vite proxy routes API calls to localhost:8000
+  baseURL: configuredBaseUrl,
   timeout: 300000,      // 5 minutes — hosted model cold start / queue can take a while
   headers: { 'Content-Type': 'application/json' },
 })

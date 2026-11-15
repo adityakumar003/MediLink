@@ -114,6 +114,35 @@ class Settings(BaseSettings):
             raise ValueError("AI_MODE must be 'hf_space', 'gemini', 'ollama', or 'offline'.")
         return normalized
 
+    # ── Video Consultations (LiveKit Cloud) ────────────────────────────────
+    LIVEKIT_URL: str = Field(
+        default="",
+        description="LiveKit Cloud WebSocket URL, e.g. wss://project.livekit.cloud.",
+    )
+    LIVEKIT_API_KEY: str = Field(
+        default="",
+        description="LiveKit API key. Kept server-side only.",
+    )
+    LIVEKIT_API_SECRET: str = Field(
+        default="",
+        description="LiveKit API secret. Kept server-side only.",
+    )
+    LIVEKIT_TOKEN_TTL_MINUTES: int = Field(
+        default=60,
+        ge=5,
+        le=360,
+        description="Lifetime of a participant-specific LiveKit access token.",
+    )
+
+    @property
+    def livekit_configured(self) -> bool:
+        """True when all LiveKit credentials required to issue tokens are present."""
+        return bool(
+            self.LIVEKIT_URL.strip()
+            and self.LIVEKIT_API_KEY.strip()
+            and self.LIVEKIT_API_SECRET.strip()
+        )
+
     # ── CORS ───────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str | List[str] = Field(
         default=["http://localhost:5173"],

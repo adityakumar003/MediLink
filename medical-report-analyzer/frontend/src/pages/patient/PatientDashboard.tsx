@@ -20,8 +20,16 @@ import Icon from '../../components/common/Icon'
 import { AvatarWithUpload } from '../../components/common/Avatar'
 import ParameterTrend from '../../components/analytics/ParameterTrend'
 import { buildTrends } from '../../components/analytics/trends'
+import VideoConsultations from '../../components/video/VideoConsultations'
 
-export type PatientSection = 'overview' | 'doctors' | 'upload' | 'history' | 'analytics' | 'chats'
+export type PatientSection =
+  | 'overview'
+  | 'doctors'
+  | 'upload'
+  | 'history'
+  | 'analytics'
+  | 'chats'
+  | 'consultations'
 
 interface PatientDashboardProps {
   section: PatientSection
@@ -163,6 +171,14 @@ const PatientDashboard: FC<PatientDashboardProps> = ({ section }) => {
                 <p className="page-sub">Chat with your connected doctors.</p>
               </>
             )}
+            {section === 'consultations' && (
+              <>
+                <h1 className="page-title">Video Consultations</h1>
+                <p className="page-sub">
+                  Join a consultation once your doctor has started it.
+                </p>
+              </>
+            )}
           </div>
           {(section === 'overview' || section === 'history') && (
             <button onClick={() => navigate('/patient/upload')} className="btn-primary">
@@ -194,8 +210,9 @@ const PatientDashboard: FC<PatientDashboardProps> = ({ section }) => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              {/* Left column — profile */}
+              {/* Left column — profile + active video calls */}
               <div className="lg:col-span-1 flex flex-col gap-4">
+                <VideoConsultations role="patient" compact />
                 <div className="card">
                   {profile && (
                     <div className="flex items-center gap-3 mb-4">
@@ -386,6 +403,13 @@ const PatientDashboard: FC<PatientDashboardProps> = ({ section }) => {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── VIDEO CONSULTATIONS ── */}
+        {section === 'consultations' && (
+          <div className="max-w-4xl">
+            <VideoConsultations role="patient" />
           </div>
         )}
 
