@@ -405,7 +405,7 @@ This implementation does not use LiveKit Agents, recording, transcription, egres
 ### 6. Two-participant verification
 
 1. Connect a patient and doctor through the normal request/accept flow.
-2. Sign in as the doctor in one browser profile and the patient in another.
+2. Sign in as the doctor in one browser profile and the patient in another. Each profile has its own `localStorage`; two tabs in the same profile share one login token and will replace each other's session.
 3. On the doctor's **Video** page, choose the patient and click **Start now** (or **Schedule** and later **Start**).
 4. Allow camera/microphone access. In the patient's **Video** page, click **Join** once the status is **Ready to join**.
 5. Verify mute/camera controls, the connection indicator, the remote participant name/role, and that both participants see each other.
