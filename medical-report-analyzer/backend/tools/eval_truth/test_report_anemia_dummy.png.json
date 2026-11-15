@@ -1,0 +1,11 @@
+{
+  "source": "test_report_anemia_dummy.png",
+  "note": "Hand-labelled ground truth from the rendered fixture (ranges read directly off the image).",
+  "tests": [
+    { "name": "Hemoglobin (Hb)", "value": 9.8, "unit": "g/dL", "status": "Low" },
+    { "name": "MCV", "value": 74, "unit": "fL", "status": "Low" },
+    { "name": "Serum Iron", "value": 38, "unit": "mcg/dL", "status": "Low" },
+    { "name": "Fasting Blood Glucose", "value": 112, "unit": "mg/dL", "status": "High" },
+    { "name": "Serum Creatinine", "value": 1.0, "unit": "mg/dL", "status": "Normal" }
+  ]
+}

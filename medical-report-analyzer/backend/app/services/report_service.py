@@ -4,18 +4,16 @@ app/services/report_service.py
 Business logic for medical report file handling and CRUD operations.
 
 Architecture: Routes → ReportService → Beanie + file_utils
-              ReportService triggers text_extraction_service and ollama_service
-              for analysis.
+              ReportService triggers text_extraction_service and the analysis
+              dispatcher (ollama_service.analyse_report_text) for analysis.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from bson import ObjectId
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
@@ -28,6 +26,8 @@ from app.utils.file_utils import (
     validate_content_type,
     validate_file_extension,
 )
+from app.utils.link_utils import user_reference
+from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +47,18 @@ async def save_report(file: UploadFile, patient_user: User) -> MedicalReport:
         HTTPException 400: invalid file type or size.
     """
     # Validate file extension
+    ext = Path(file.filename or "").suffix.lower()
     if not validate_file_extension(file.filename or ""):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are accepted. Please upload a .pdf file.",
+            detail="Only PDF and image files (JPG, JPEG, PNG) are accepted.",
         )
 
     # Validate content type
     if not validate_content_type(file.content_type):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only application/pdf is accepted.",
+            detail="Invalid file type. Only application/pdf, image/jpeg, and image/png are accepted.",
         )
 
     # Read content and check size
@@ -70,6 +71,24 @@ async def save_report(file: UploadFile, patient_user: User) -> MedicalReport:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File size exceeds the {settings.MAX_FILE_SIZE_MB} MB limit.",
         )
+
+    if ext == ".pdf":
+        if not content.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is not a valid PDF document.",
+            )
+    else:
+        import io
+        from PIL import Image
+        try:
+            with Image.open(io.BytesIO(content)) as img:
+                img.verify()
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is not a valid image file.",
+            )
 
     # Generate unique filename and save to disk
     stored_name = generate_unique_filename(file.filename or "report.pdf")
@@ -94,7 +113,7 @@ async def save_report(file: UploadFile, patient_user: User) -> MedicalReport:
 async def list_reports(patient_user_id: str) -> List[ReportListItem]:
     """Return all MedicalReport documents for the authenticated patient."""
     reports = await MedicalReport.find(
-        MedicalReport.patient.id == ObjectId(patient_user_id),  # type: ignore[attr-defined]
+        {"patient": user_reference(patient_user_id)},
     ).sort(-MedicalReport.uploaded_at).to_list()
 
     return [
@@ -152,7 +171,7 @@ async def update_report_status(
         report.extracted_text = extracted_text
     if analysis_result is not None:
         report.analysis_result = analysis_result
-        report.analyzed_at = datetime.utcnow()
+        report.analyzed_at = utc_now()
     if error_message is not None:
         report.error_message = error_message
     await report.save()
@@ -212,3 +231,40 @@ async def get_patient_report_for_doctor(
         error_message=report.error_message,
         has_analysis=report.analysis_result is not None,
     )
+
+
+async def delete_report(report_id: str, patient_user_id: str) -> dict:
+    """
+    Delete a failed report and its stored file, verifying patient ownership.
+
+    Only reports with status FAILED can be deleted, so successfully
+    analysed medical data is never removed by accident.
+
+    Raises:
+        HTTPException 404: if report not found.
+        HTTPException 403: if the authenticated patient does not own it.
+        HTTPException 409: if the report is not in failed status.
+    """
+    report = await MedicalReport.get(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    await report.fetch_link(MedicalReport.patient)
+    patient: User = report.patient  # type: ignore[assignment]
+    if str(patient.id) != patient_user_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    if report.status != ReportStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed reports can be deleted.",
+        )
+
+    try:
+        Path(report.file_path).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove stored file for report %s", report_id)
+
+    await report.delete()
+    logger.info("Deleted failed report %s", report_id)
+    return {"message": "Report deleted.", "id": report_id}

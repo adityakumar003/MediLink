@@ -35,14 +35,54 @@ function App() {
           {/* Patient routes */}
           <Route path="/patient/dashboard" element={
             <ProtectedRoute requiredRole="patient">
-              <PatientDashboard />
+              <PatientDashboard section="overview" />
+            </ProtectedRoute>
+          } />
+          <Route path="/patient/doctors" element={
+            <ProtectedRoute requiredRole="patient">
+              <PatientDashboard section="doctors" />
+            </ProtectedRoute>
+          } />
+          <Route path="/patient/upload" element={
+            <ProtectedRoute requiredRole="patient">
+              <PatientDashboard section="upload" />
+            </ProtectedRoute>
+          } />
+          <Route path="/patient/history" element={
+            <ProtectedRoute requiredRole="patient">
+              <PatientDashboard section="history" />
+            </ProtectedRoute>
+          } />
+          <Route path="/patient/analytics" element={
+            <ProtectedRoute requiredRole="patient">
+              <PatientDashboard section="analytics" />
+            </ProtectedRoute>
+          } />
+          <Route path="/patient/chats" element={
+            <ProtectedRoute requiredRole="patient">
+              <PatientDashboard section="chats" />
             </ProtectedRoute>
           } />
 
           {/* Doctor routes */}
           <Route path="/doctor/dashboard" element={
             <ProtectedRoute requiredRole="doctor">
-              <DoctorDashboard />
+              <DoctorDashboard section="overview" />
+            </ProtectedRoute>
+          } />
+          <Route path="/doctor/requests" element={
+            <ProtectedRoute requiredRole="doctor">
+              <DoctorDashboard section="requests" />
+            </ProtectedRoute>
+          } />
+          <Route path="/doctor/patients" element={
+            <ProtectedRoute requiredRole="doctor">
+              <DoctorDashboard section="patients" />
+            </ProtectedRoute>
+          } />
+          <Route path="/doctor/analytics" element={
+            <ProtectedRoute requiredRole="doctor">
+              <DoctorDashboard section="analytics" />
             </ProtectedRoute>
           } />
 

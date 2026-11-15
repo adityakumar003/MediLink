@@ -67,3 +67,19 @@ async def get_report(
     Only the owning patient can access their own report.
     """
     return await report_service.get_report_by_id(report_id, str(current_user.id))
+
+
+@router.delete(
+    "/{report_id}",
+    summary="Delete a failed report",
+)
+async def delete_report(
+    report_id: str,
+    current_user: User = Depends(require_patient_role),
+) -> dict:
+    """
+    Delete a failed report and its stored file.
+    Only the owning patient can delete, and only failed reports
+    can be deleted. Returns 409 for analysed reports.
+    """
+    return await report_service.delete_report(report_id, str(current_user.id))

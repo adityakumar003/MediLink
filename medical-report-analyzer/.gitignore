@@ -67,6 +67,7 @@ pnpm-debug.log*
 
 # Vite / Build output
 frontend/dist/
+frontend/dist-test/
 frontend/.vite/
 frontend/build/
 .cache/
@@ -117,6 +118,25 @@ mlartifacts/
 notebooks/.ipynb_checkpoints/
 notebooks/**/.ipynb_checkpoints/
 *.ipynb_checkpoints
+
+# ───────────── Local report / scratch artifacts ─────────────
+# Academic report generation and one-off document tooling (not app source).
+/report_build/
+/ref_text.txt
+/ref_ilovepdf_text.txt
+/LLM_AAT_REPORT.pdf
+/MediChat_NLP_AAT_Report.pdf
+/major_project_reprot.pdf
+/ilovepdf_merged (4).pdf
+/dump_tables.py
+/extract_ref.py
+/extract_ref2.py
+/inspect_colors.py
+/inspect_results.py
+/inspect_style.py
+/inspect_templates.py
+/inspect_testpdf.py
+/render_ref.py
 
 # ───────────── IDE / OS ─────────────
 .idea/

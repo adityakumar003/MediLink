@@ -1,37 +1,74 @@
 /**
  * src/layouts/DoctorLayout.tsx
- * Dashboard layout for doctor pages.
+ * Floating glass sidebar + content area for doctor pages.
  */
 import type { FC, ReactNode } from 'react'
-import { NavLink } from 'react-router-dom'
-import Navbar from '../components/common/Navbar'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
+import { logout as apiLogout } from '../services/authService'
+import Icon, { type IconName } from '../components/common/Icon'
 
-const NAV = [
-  { label: 'Dashboard', path: '/doctor/dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+const NAV: { label: string; path: string; icon: IconName }[] = [
+  { label: 'Dashboard', path: '/doctor/dashboard', icon: 'grid' },
+  { label: 'Requests', path: '/doctor/requests', icon: 'users' },
+  { label: 'Patients', path: '/doctor/patients', icon: 'user' },
+  { label: 'Analytics', path: '/doctor/analytics', icon: 'trendingUp' },
 ]
 
 interface DoctorLayoutProps { children: ReactNode }
 
-const DoctorLayout: FC<DoctorLayoutProps> = ({ children }) => (
-  <div className="min-h-screen flex flex-col">
-    <Navbar />
-    <div className="flex flex-1">
-      <aside className="hidden md:flex flex-col w-56 bg-white border-r border-slate-200 p-4 shrink-0">
+const DoctorLayout: FC<DoctorLayoutProps> = ({ children }) => {
+  const { logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleSignOut = async () => {
+    try { await apiLogout() } catch { /* ignore */ }
+    logout()
+    navigate('/login')
+  }
+
+  return (
+    <div className="min-h-screen flex gap-4 p-4">
+      {/* Sidebar */}
+      <aside className="sidebar-shell hidden md:flex flex-col w-60 rounded-3xl p-5 shrink-0 sticky top-4 h-[calc(100vh-2rem)]">
+        <div className="flex items-center gap-2.5 px-1">
+          <span className="logo-mark">
+            <Icon name="activity" className="w-5 h-5" />
+          </span>
+          <span className="font-bold text-lg text-slate-900 tracking-tight">MediBridge</span>
+        </div>
+        <p className="sidebar-caption mt-6">Doctor</p>
         <nav className="flex flex-col gap-1">
           {NAV.map(item => (
             <NavLink key={item.path} to={item.path}
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.icon}/>
-              </svg>
+              <Icon name={item.icon} className="w-4 h-4" />
               {item.label}
             </NavLink>
           ))}
         </nav>
+        <div className="mt-auto flex flex-col gap-1">
+          <button onClick={handleSignOut} className="sidebar-link w-full text-left">
+            <Icon name="logout" className="w-4 h-4" />
+            Sign out
+          </button>
+        </div>
       </aside>
-      <main className="flex-1 p-4 md:p-6 overflow-auto">{children}</main>
+
+      {/* Main column */}
+      <div className="flex-1 min-w-0 flex flex-col gap-4">
+        <nav className="sidebar-shell md:hidden flex gap-1 rounded-2xl px-3 py-2 overflow-x-auto">
+          {NAV.map(item => (
+            <NavLink key={item.path} to={item.path}
+              className={({ isActive }) => `sidebar-link shrink-0 ${isActive ? 'active' : ''}`}>
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+        <main className="flex-1 overflow-auto">{children}</main>
+      </div>
     </div>
-  </div>
-)
+  )
+}
 
 export default DoctorLayout

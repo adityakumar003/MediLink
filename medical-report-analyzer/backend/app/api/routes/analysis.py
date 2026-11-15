@@ -2,13 +2,12 @@
 app/api/routes/analysis.py
 ───────────────────────────
 Analysis trigger and result retrieval endpoints.
-This route orchestrates: text extraction → Ollama analysis → result storage.
+This route orchestrates: text extraction → configured LLM analysis → result storage.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -18,6 +17,8 @@ from app.models.user import User
 from app.schemas.analysis import AnalysisResult, AnalysisTriggerResponse, DiseaseRisks, DiseaseRiskItem, MedicalParameter
 from app.services import ollama_service, report_service, text_extraction_service
 from app.services.report_service import update_report_status
+from app.services.risk_assessment import legacy_risk_item
+from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,8 @@ async def trigger_analysis(
     """
     Run the full analysis pipeline for a report:
       1. Verify report ownership
-      2. Extract text from PDF (PyMuPDF → pdfplumber fallback)
-      3. Send extracted text to Ollama
+      2. Extract text from PDF/image (PyMuPDF → PaddleOCR for scanned pages)
+      3. Send extracted text to the configured analysis provider
       4. Store the structured result in the MedicalReport document
 
     Returns immediately with status=analyzing; the patient then
@@ -76,7 +77,7 @@ async def trigger_analysis(
             detail=str(exc),
         )
 
-    # ── Step 2: Ollama analysis ───────────────────────────────────────────
+    # ── Step 2: Configured analysis provider ──────────────────────────────
     await update_report_status(report, ReportStatus.ANALYZING)
     try:
         analysis_result = await ollama_service.analyse_report_text(extracted_text)
@@ -89,7 +90,7 @@ async def trigger_analysis(
         await update_report_status(
             report,
             ReportStatus.FAILED,
-            error_message="Ollama analysis failed.",
+            error_message="AI analysis failed.",
         )
         raise
 
@@ -142,25 +143,15 @@ async def get_analysis_results(
 
     raw = report.analysis_result
 
-    # Build the typed AnalysisResult from the stored dict
+    # Build the typed AnalysisResult from the stored dict.
+    # Legacy reports (pre-assessment-states) only carry level/reason;
+    # legacy_risk_item maps them compatibly.
     disease_risks_raw = raw.get("disease_risks", {})
     disease_risks = DiseaseRisks(
-        diabetes=DiseaseRiskItem(
-            level=disease_risks_raw.get("diabetes", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("diabetes", {}).get("reason", ""),
-        ),
-        ckd=DiseaseRiskItem(
-            level=disease_risks_raw.get("ckd", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("ckd", {}).get("reason", ""),
-        ),
-        anemia=DiseaseRiskItem(
-            level=disease_risks_raw.get("anemia", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("anemia", {}).get("reason", ""),
-        ),
-        cardiovascular=DiseaseRiskItem(
-            level=disease_risks_raw.get("cardiovascular", {}).get("level", "Insufficient Data"),
-            reason=disease_risks_raw.get("cardiovascular", {}).get("reason", ""),
-        ),
+        diabetes=DiseaseRiskItem(**legacy_risk_item("diabetes", disease_risks_raw)),
+        ckd=DiseaseRiskItem(**legacy_risk_item("ckd", disease_risks_raw)),
+        anemia=DiseaseRiskItem(**legacy_risk_item("anemia", disease_risks_raw)),
+        cardiovascular=DiseaseRiskItem(**legacy_risk_item("cardiovascular", disease_risks_raw)),
     )
 
     parameters = [
@@ -172,5 +163,5 @@ async def get_analysis_results(
         summary=raw.get("summary", ""),
         parameters=parameters,
         disease_risks=disease_risks,
-        analyzed_at=report.analyzed_at or datetime.utcnow(),
+        analyzed_at=report.analyzed_at or utc_now(),
     )

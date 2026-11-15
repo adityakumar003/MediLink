@@ -1,0 +1,5 @@
+# Generated benchmark artifacts (dataset images + OCR cache)
+images/
+ocr_texts/
+__pycache__/
+*.log

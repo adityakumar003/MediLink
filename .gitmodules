@@ -1,0 +1,3 @@
+[submodule "MediBridge-qwen"]
+	path = MediBridge-qwen
+	url = https://huggingface.co/spaces/adityaksingh/MediBridge-qwen

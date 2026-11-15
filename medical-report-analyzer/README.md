@@ -13,7 +13,9 @@
 - [Running the Backend](#-running-the-backend-locally)
 - [Running the Frontend](#-running-the-frontend-locally)
 - [MongoDB Atlas Setup](#-mongodb-atlas-setup)
-- [Gemini API Key Setup](#-gemini-api-key-setup)
+- [Hugging Face Space (default LLM)](#-hugging-face-space-default-llm)
+- [Optional Ollama Setup](#-optional-ollama-setup)
+- [Running Tests](#-running-tests)
 - [Docker Compose](#-running-with-docker-compose)
 - [MVP Scope vs Future Modules](#-mvp-scope-vs-future-modules)
 - [Development Roadmap](#-development-roadmap)
@@ -25,26 +27,27 @@
 ### Purpose
 Patients generate medical lab reports regularly, but most people lack the medical expertise to understand them. This system bridges that gap by:
 
-1. **Accepting PDF uploads** of medical lab reports
-2. **Extracting all text** from the PDF (text-layer or scanned)
-3. **Sending the text to Gemini AI** to produce a structured analysis
-4. **Predicting disease risks** (diabetes, CKD, anemia, cardiovascular) using ML models
+1. **Accepting PDF or image uploads** of medical lab reports
+2. **Extracting text** from digital PDFs (PyMuPDF) and scanned pages/images (PaddleOCR)
+3. **Sending the text to a hosted Qwen model** (Hugging Face Space) for a cautious explanation
+4. **Classifying values in Python** against the reference range printed on that report
 5. **Presenting results** in a clear, patient-friendly dashboard
 6. **Allowing doctors** to view their patients' reports securely
 
 ### Key Features (MVP — Phase 1)
 | Feature | Status |
 |---------|--------|
-| Patient registration & JWT authentication | 🔨 Scaffold |
-| Doctor registration with unique doctor_id | 🔨 Scaffold |
-| PDF medical report upload | 🔨 Scaffold |
-| Text extraction via PyMuPDF / pdfplumber | 🔨 Scaffold |
-| AI analysis via Google Gemini | 🔨 Scaffold |
-| Structured parameter extraction | 🔨 Scaffold |
-| Disease risk summary (Gemini-powered) | 🔨 Scaffold |
-| Patient dashboard | 🔨 Scaffold |
-| Doctor dashboard with patient management | 🔨 Scaffold |
-| Doctor–patient connection request system | 🔨 Scaffold |
+| Patient registration & JWT authentication | ✅ Complete |
+| Doctor registration with unique doctor_id | ✅ Complete |
+| PDF and image report upload | ✅ Complete |
+| Text extraction via PyMuPDF + PaddleOCR | ✅ Complete |
+| Hugging Face Qwen report analysis | ✅ Default (`AI_MODE=hf_space`) |
+| Offline report analysis | ✅ Complete (`AI_MODE=offline`) |
+| Ollama-powered report analysis | ✅ Optional (`AI_MODE=ollama`) |
+| Patient dashboard | ✅ Complete |
+| Doctor dashboard with patient management | ✅ Complete |
+| Doctor–patient connection and chat | ✅ Complete |
+| GPS-based nearby doctor discovery | ✅ Complete |
 
 ---
 
@@ -64,10 +67,9 @@ Patients generate medical lab reports regularly, but most people lack the medica
 | passlib[bcrypt] | 1.7.4 | Password hashing |
 | python-multipart | 0.0.9 | File upload support |
 | python-dotenv | 1.0.1 | .env file loading |
-| google-generativeai | 0.5.4 | Gemini API client |
+| httpx | 0.27.0 | HTTP client (Ollama path) |
+| gradio-client | ≥2.7.0 | Hugging Face Gradio Space client |
 | PyMuPDF | 1.24.3 | Primary PDF text extraction |
-| pdfplumber | 0.11.0 | Fallback PDF extraction |
-| httpx | 0.27.0 | Async HTTP client |
 | pytest | 8.2.0 | Test framework |
 | pytest-asyncio | 0.23.6 | Async test support |
 
@@ -128,8 +130,8 @@ medical-report-analyzer/
 │       ├── schemas/             # Pydantic request/response schemas
 │       ├── services/            # Business logic layer
 │       ├── ai/
-│       │   ├── gemini/          # Gemini client + prompt templates
-│       │   ├── ocr/             # Future: PaddleOCR pipeline
+│       │   ├── ollama/          # Optional local Ollama prompts
+│       │   ├── ocr/             # Unused stub; live OCR is in text_extraction_service
 │       │   ├── nlp/             # Future: BioBERT NER
 │       │   ├── disease_prediction/ # Future: XGBoost/LightGBM models
 │       │   └── explainability/  # Future: SHAP
@@ -157,16 +159,23 @@ medical-report-analyzer/
 
 ## 🔐 Environment Variables
 
-Copy `backend/.env.example` to `backend/.env` and fill in your values.
+Copy `backend/.env.example` to `backend/.env`. Never commit `.env` (it is gitignored).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MONGODB_URL` | ✅ | Full MongoDB Atlas connection string |
+| `MONGODB_URL` | Production | Full MongoDB Atlas connection string |
 | `DATABASE_NAME` | ✅ | MongoDB database name (default: `medical_report_analyzer`) |
+| `USE_IN_MEMORY_DB` | ✅ | `true` for zero-setup local use; `false` for MongoDB |
 | `SECRET_KEY` | ✅ | Secret key for JWT signing — use `openssl rand -hex 32` |
 | `ALGORITHM` | ✅ | JWT algorithm (default: `HS256`) |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | ✅ | Token lifetime in minutes (default: `30`) |
-| `GEMINI_API_KEY` | ✅ | Your Google AI Studio API key |
+| `AI_MODE` | ✅ | `hf_space` (default), `gemini`, `ollama`, or `offline`. No silent fallback. |
+| `ENABLE_LLM_SUMMARY` | ✅ | `true` (default) enables LLM narrative; `false` disables **all** LLM calls and uses the deterministic pipeline with a template summary. |
+| `HF_SPACE_URL` | HF default | `https://huggingface.co/spaces/adityaksingh/MediBridge-qwen` |
+| `HF_TOKEN` | Usually empty | Backend-only. Set only if the Space is private. Never put this in frontend env. |
+| `HF_TIMEOUT_SECONDS` | HF default | Wait time for Space inference (default `120`) |
+| `OLLAMA_BASE_URL` | Ollama only | Local Ollama service URL |
+| `OLLAMA_MODEL` | Ollama only | Installed model name |
 | `ALLOWED_ORIGINS` | ✅ | CORS allowed origins (default: `http://localhost:5173`) |
 | `UPLOAD_DIR` | ✅ | Directory for uploaded files (default: `uploads`) |
 | `MAX_FILE_SIZE_MB` | ✅ | Upload size limit in MB (default: `10`) |
@@ -179,8 +188,9 @@ Copy `backend/.env.example` to `backend/.env` and fill in your values.
 ### Prerequisites
 - Python 3.10+
 - pip
-- MongoDB Atlas account with a cluster (see below)
-- Google AI Studio API key (see below)
+- MongoDB Atlas only when persistent storage is required
+- Network access to Hugging Face when `AI_MODE=hf_space`
+- Ollama only when `AI_MODE=ollama`
 
 ### Steps
 
@@ -201,7 +211,7 @@ pip install -r requirements.txt
 # 4. Set up environment variables
 copy .env.example .env     # Windows
 # cp .env.example .env     # macOS/Linux
-# Then edit .env and fill in your MONGODB_URL, GEMINI_API_KEY, SECRET_KEY
+# The default file uses an in-memory database and Hugging Face Space analysis.
 
 # 5. Create the uploads directory (if it doesn't exist)
 mkdir -p uploads
@@ -260,15 +270,99 @@ The frontend will be available at: **http://localhost:5173**
 
 ---
 
-## 🤖 Gemini API Key Setup
+## 🤗 Hugging Face Space (default LLM)
 
-1. Go to [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
-2. Sign in with your Google account.
-3. Click **"Create API Key"** → select your Google Cloud project (or create one).
-4. Copy the generated API key.
-5. Paste it as `GEMINI_API_KEY` in your `backend/.env` file.
+Default analysis uses the public Gradio Space:
 
-> **Free tier**: Gemini API has a generous free tier. The `gemini-1.5-flash` model is recommended for this project for speed and cost efficiency.
+`https://huggingface.co/spaces/adityaksingh/MediBridge-qwen`
+
+It serves `Qwen/Qwen2.5-3B-Instruct` on Hugging Face ZeroGPU. The backend calls the Gradio `/analyze` endpoint via `gradio-client`. This is **not** an OpenAI-compatible chat-completions URL.
+
+```env
+AI_MODE=hf_space
+HF_SPACE_URL=https://huggingface.co/spaces/adityaksingh/MediBridge-qwen
+HF_TOKEN=
+HF_TIMEOUT_SECONDS=120
+```
+
+- Leave `HF_TOKEN` empty for the public Space.
+- If authentication is required later, set a token in **backend** `.env` only.
+- ZeroGPU may cold-start: the first request can take tens of seconds (the Space GPU budget is ~90s). Free-tier queues and rate limits can return HTTP 503; retry from the UI.
+- Hugging Face failures do **not** silently fall back to Ollama. Switch `AI_MODE` explicitly if you want another provider.
+
+### Troubleshooting
+
+| Symptom | What to try |
+|---------|-------------|
+| Analysis times out | Retry after 30–60s (cold start). Increase `HF_TIMEOUT_SECONDS`. |
+| 503 authentication | Space may be private; set `HF_TOKEN` in backend `.env`. |
+| 503 rate limit / quota | Wait and retry; ZeroGPU free tier is shared. |
+| 422 extracted text too short | PDF may be blank/scanned without OCR. Install PaddleOCR for images. |
+| 502 unparseable analysis | Retry; the model returned unstructured text. |
+
+## 🤖 Optional Ollama Setup
+
+Ollama is **not** required for the default hosted-inference workflow. To use a local model instead:
+
+```env
+AI_MODE=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2:1b
+```
+
+For local-only extraction without any LLM:
+
+```env
+AI_MODE=offline
+```
+
+## ✨ Optional Gemini Setup
+
+Google Gemini can generate the report summary instead of the Hugging Face Space.
+It uses the same response contract: Gemini writes the structured analysis and
+Python still validates every numerical status, so the model cannot override
+validated Low/Normal/High classifications.
+
+```env
+AI_MODE=gemini
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+- Get a key at https://aistudio.google.com/apikey — keep it in backend `.env` only, never in frontend code.
+- Switch back to Hugging Face with one change: `AI_MODE=hf_space`.
+- Gemini failures do **not** silently fall back to another provider.
+
+## 🧪 Running Tests
+
+```bash
+cd medical-report-analyzer/backend
+python -m pytest
+```
+
+Automated tests force `AI_MODE=offline` for upload/history integration and **mock** Hugging Face (`gradio_client`), Gemini (`google.genai`), and PaddleOCR for provider/extraction tests. They do not call live models and do not require PaddlePaddle.
+
+### PaddleOCR environment note
+
+PaddlePaddle 2.x is incompatible with `protobuf>=4` (`Descriptors cannot be
+created directly`), while `google-genai` requires modern protobuf — so neither
+package version can simply change. The backend therefore forces protobuf's
+pure-Python implementation for the OCR stack in code (`app/main.py`, no action
+needed). If you prefer native speed, the proper fix is migrating to
+PaddlePaddle/PaddleOCR 3.x.
+
+## 🩺 Disease Risk Assessment Engine
+
+Risk cards are produced by a **deterministic backend engine** (`backend/app/services/risk_assessment.py`), not by the LLM and not by a validated clinical risk model:
+
+- Each condition returns an explicit state: `assessed`, `insufficient_data`, `not_assessed`, or `requires_review`.
+- A risk level appears **only** when an adequate marker set supports it; otherwise the card shows the evidence, the missing inputs, the method (if any), and clinician-review guidance.
+- Examples of deliberate restraint: a lone normal creatinine never yields a CKD claim; total cholesterol alone never yields an overall cardiovascular category (no validated calculator is implemented); an abnormal marker yields `requires_review`, never a diagnosis.
+- The LLM (when enabled) only writes the narrative summary from validated results, and a consistency guard replaces summaries that contradict validated abnormal findings. Numerical statuses always come from `lab_validation.py`.
+
+To disable every LLM call (zero API cost/quota): `ENABLE_LLM_SUMMARY=false`. The parameter table, states, and template summary keep working.
+
+> **Clinical validation status:** the engine's rules are evidence-grounded heuristics reviewed against the sample report, covered by unit tests — they are **not** a clinically validated risk model. Formal validation would require a clinician-adjudicated reference set: collect de-identified reports spanning normal/borderline/abnormal/incomplete/noisy cases, have clinicians label the appropriate assessment state per condition, and measure engine agreement before any clinical reliance.
 
 ---
 
@@ -313,18 +407,17 @@ docker compose down
 - User registration & JWT authentication (patient + doctor roles)
 - Doctor profile with unique doctor_id
 - Doctor–patient connection request system
-- Medical PDF report upload (local storage)
-- PDF text extraction: PyMuPDF → pdfplumber fallback
-- AI analysis via Google Gemini 1.5 Flash
-- Structured data extraction (parameters, risks, recommendations)
+- Medical PDF/image report upload (local storage)
+- PDF text extraction: PyMuPDF, with PaddleOCR for scanned pages and images
+- AI analysis via Hugging Face Qwen Space (optional Ollama or offline)
+- Structured data extraction (parameters, risks) mapped to the existing API contract
 - Patient dashboard (upload, view analysis)
 - Doctor dashboard (manage patients, view reports)
 
 ### 🔜 Phase 2 — Advanced OCR & NER
-- PaddleOCR 2.7 + PaddlePaddle for scanned/image PDFs
-- OpenCV 4.8 preprocessing (denoising, deskewing, contrast)
+- Stronger OpenCV preprocessing (denoising, deskewing, contrast)
 - BioBERT / ClinicalBERT NER for medical entity extraction
-- Support for multi-page reports and complex layouts
+- Support for more complex multi-page layouts
 
 ### 🔮 Phase 3 — ML Disease Prediction & Explainability
 - XGBoost + LightGBM disease prediction models:
@@ -346,13 +439,13 @@ Phase 1 (MVP)          Phase 2 (OCR/NER)      Phase 3 (ML Models)
 ─────────────          ─────────────────       ───────────────────
 Auth system      →     PaddleOCR pipeline →    Disease prediction
 Report upload          OpenCV preprocessing    SHAP explanations
-PyMuPDF extract        BioBERT NER             MLflow tracking
-Gemini AI              Scanned PDF support     PDF report export
+PyMuPDF + OCR          BioBERT NER             MLflow tracking
+Hugging Face Qwen      Layout improvements     PDF report export
 Patient dashboard      Improved accuracy       S3 file storage
 Doctor dashboard       Multi-page support      Production deploy
 ```
 
-**Current Phase**: 🏗️ **Phase 1 — Scaffold Complete, Implementation in Progress**
+**Current Phase**: ✅ **Phase 1 MVP complete**
 
 ---
 

@@ -14,6 +14,12 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+import os
+
+# Must precede any google.protobuf import (e.g. via google-genai): the OCR
+# stack (PaddlePaddle 2.x) is incompatible with protobuf>=4's C++ backend.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -24,7 +30,7 @@ from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection, ping_database
 
 # ── Route imports ──────────────────────────────────────────────────────────
-from app.api.routes import auth, doctors, patients, reports, analysis
+from app.api.routes import auth, chat, doctors, patients, reports, analysis
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +65,8 @@ def create_application() -> FastAPI:
     app = FastAPI(
         title="AI-Based Medical Report Analyzer",
         description=(
-            "API for uploading medical PDFs, extracting text, running analysis "
-            "via Ollama AI, and predicting disease risks."
+            "API for uploading medical PDFs and images, extracting text, running "
+            "analysis via a Hugging Face Space (default), optional Ollama, or offline mode."
         ),
         version="0.1.0",
         docs_url="/docs" if not settings.is_production else None,
@@ -83,6 +89,7 @@ def create_application() -> FastAPI:
     app.include_router(patients.router, prefix="/patients", tags=["Patients"])
     app.include_router(reports.router,  prefix="/reports",  tags=["Reports"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
+    app.include_router(chat.router,     prefix="/chat",     tags=["Chat"])
 
     return app
 
@@ -105,5 +112,7 @@ async def health_check() -> dict:
         "status": "ok" if db_ok else "degraded",
         "environment": settings.ENVIRONMENT,
         "database": "connected" if db_ok else "unreachable",
+        "database_mode": "in-memory" if settings.USE_IN_MEMORY_DB else "persistent",
+        "analysis_mode": settings.AI_MODE,
         "version": "0.1.0",
     }

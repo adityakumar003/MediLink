@@ -33,3 +33,8 @@ export async function getAnalysis(reportId: string): Promise<AnalysisResult> {
   const res = await api.get<AnalysisResult>(`/analysis/${reportId}`)
   return res.data
 }
+
+export async function deleteReport(reportId: string): Promise<{ message: string; id: string }> {
+  const res = await api.delete(`/reports/${reportId}`)
+  return res.data
+}

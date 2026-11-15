@@ -12,6 +12,7 @@ from typing import Optional
 
 from beanie import Document, Indexed
 from pydantic import EmailStr, Field
+from app.utils.time_utils import utc_now
 
 
 class UserRole(str, Enum):
@@ -28,7 +29,8 @@ class User(Document):
     full_name: str
     role: UserRole
     is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    profile_photo: Optional[str] = None  # stored filename under uploads/profile_photos/
+    created_at: datetime = Field(default_factory=utc_now)
 
     class Settings:
         name = "users"

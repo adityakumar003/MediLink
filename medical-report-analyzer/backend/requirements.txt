@@ -12,6 +12,7 @@ uvicorn[standard]==0.29.0
 motor==3.5.0
 pymongo==4.6.3
 beanie==1.26.0
+mongomock-motor==0.0.36
 
 # ── Data Validation ───────────────────────────────────────────────────────
 pydantic==2.7.1
@@ -28,8 +29,9 @@ python-multipart==0.0.9
 # ── Environment Variables ─────────────────────────────────────────────────
 python-dotenv==1.0.1
 
-# ── AI / Ollama ───────────────────────────────────────────────────────────
-# (Uses httpx which is already installed below)
+# ── AI Inference (Hugging Face Space, Gemini & Ollama) ────────────────────
+gradio-client>=2.7.0
+google-genai>=1.0.0
 
 # ── PDF Text Extraction (Phase 1) ─────────────────────────────────────────
 PyMuPDF==1.24.3
@@ -48,10 +50,10 @@ pytest-asyncio==0.23.6
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── OCR Pipeline (Phase 2) ────────────────────────────────────────────────
-# paddlepaddle==2.5.2
-# paddleocr==2.7.0
-# opencv-python==4.8.1.78
-# Pillow==10.3.0
+paddlepaddle==2.6.2
+paddleocr==2.9.1
+opencv-python>=4.8.0
+Pillow>=10.3.0
 
 # ── NLP / NER (Phase 2) ───────────────────────────────────────────────────
 # transformers==4.40.0

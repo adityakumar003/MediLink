@@ -1,8 +1,8 @@
 """
 app/schemas/analysis.py
 ────────────────────────
-Pydantic schemas for the structured analysis result returned by Ollama.
-These match the exact JSON contract that the Ollama prompt produces.
+Pydantic schemas for the structured analysis result returned to the frontend.
+All providers (Hugging Face Space, Ollama, offline) must map to this contract.
 """
 
 from __future__ import annotations
@@ -18,14 +18,21 @@ class MedicalParameter(BaseModel):
     name: str
     value: Any                            # can be float or string
     unit: str
-    status: str                           # "Normal" | "Low" | "High" | "Critical"
+    status: str                           # "Normal" | "Low" | "High" | "Critical" | "Unknown"
     reference_range: Optional[str] = None
+    report_flag: Optional[str] = None     # the report's own flag word, if printed
+    flag_mismatch: bool = False           # True when the report flag disagrees with validated status
 
 
 class DiseaseRiskItem(BaseModel):
-    """Risk assessment for a single disease."""
-    level: str                            # "Low Risk" | "Moderate Risk" | "High Risk" | "Insufficient Data"
-    reason: str
+    """Preliminary assessment for a single condition (decision support only)."""
+    level: Optional[str] = None           # "Low Risk" etc. — only when state == "assessed"
+    reason: str = ""
+    state: str = "insufficient_data"      # assessed | insufficient_data | not_assessed | requires_review
+    evidence: List[str] = []
+    missing: List[str] = []
+    method: Optional[str] = None
+    guidance: str = ""
 
 
 class DiseaseRisks(BaseModel):
@@ -38,8 +45,7 @@ class DiseaseRisks(BaseModel):
 
 class AnalysisResult(BaseModel):
     """
-    Full analysis result — mirrors the exact JSON returned by Ollama.
-    Also returned by GET /analysis/{report_id}.
+    Full analysis result returned by GET /analysis/{report_id}.
     """
     report_id: str
     summary: str

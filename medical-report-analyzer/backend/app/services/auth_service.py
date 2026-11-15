@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import secrets
 import string
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 
 from app.core.security import hash_password, verify_password, create_access_token
 from app.models.user import User, UserRole
@@ -52,7 +54,8 @@ async def register_user(payload: RegisterRequest) -> TokenResponse:
       5. Return a JWT access token.
     """
     # 1. Check email uniqueness
-    existing = await User.find_one(User.email == payload.email)
+    normalized_email = str(payload.email).strip().lower()
+    existing = await User.find_one(User.email == normalized_email)
     if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -71,34 +74,41 @@ async def register_user(payload: RegisterRequest) -> TokenResponse:
 
     # 3. Create User document
     user = User(
-        email=payload.email,
+        email=normalized_email,
         hashed_password=hashed,
         full_name=payload.full_name,
         role=payload.role,
     )
     await user.insert()
 
-    # 4. Create profile
-    if payload.role == UserRole.DOCTOR:
-        doctor_id = await _ensure_unique_doctor_id()
-        profile = DoctorProfile(
-            user=user,
-            doctor_id=doctor_id,
-            specialization=payload.specialization or "General",
-            experience=payload.experience or 0,
-            hospital=payload.hospital,
-        )
-        await profile.insert()
-        logger.info("Doctor registered: %s (doctor_id=%s)", user.email, doctor_id)
-    else:
-        profile = PatientProfile(
-            user=user,
-            age=payload.age,
-            gender=payload.gender,
-            phone=payload.phone,
-        )
-        await profile.insert()
-        logger.info("Patient registered: %s", user.email)
+    # 4. Create profile. Remove the user if profile creation fails so
+    # registration cannot leave an unusable account behind.
+    try:
+        if payload.role == UserRole.DOCTOR:
+            doctor_id = await _ensure_unique_doctor_id()
+            profile = DoctorProfile(
+                user=user,
+                doctor_id=doctor_id,
+                specialization=payload.specialization or "General",
+                experience=payload.experience or 0,
+                hospital=payload.hospital,
+                latitude=payload.latitude,
+                longitude=payload.longitude,
+            )
+            await profile.insert()
+            logger.info("Doctor registered: %s (doctor_id=%s)", user.email, doctor_id)
+        else:
+            profile = PatientProfile(
+                user=user,
+                age=payload.age,
+                gender=payload.gender,
+                phone=payload.phone,
+            )
+            await profile.insert()
+            logger.info("Patient registered: %s", user.email)
+    except Exception:
+        await user.delete()
+        raise
 
     # 5. Issue JWT
     token = create_access_token(
@@ -113,6 +123,7 @@ async def register_user(payload: RegisterRequest) -> TokenResponse:
             email=user.email,
             full_name=user.full_name,
             role=user.role,
+            has_photo=user.profile_photo is not None,
         ),
     )
 
@@ -124,7 +135,8 @@ async def login_user(payload: LoginRequest) -> TokenResponse:
     Returns a JWT access token on success.
     Raises HTTP 401 on invalid credentials.
     """
-    user = await User.find_one(User.email == payload.email)
+    normalized_email = str(payload.email).strip().lower()
+    user = await User.find_one(User.email == normalized_email)
 
     if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
@@ -153,5 +165,92 @@ async def login_user(payload: LoginRequest) -> TokenResponse:
             email=user.email,
             full_name=user.full_name,
             role=user.role,
+            has_photo=user.profile_photo is not None,
         ),
     )
+
+
+# ── Profile photo ─────────────────────────────────────────────────────────
+
+PROFILE_PHOTO_DIRNAME = "profile_photos"
+PROFILE_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+PROFILE_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024
+
+
+def _profile_photo_dir() -> Path:
+    from app.core.config import settings
+
+    path = Path(settings.UPLOAD_DIR) / PROFILE_PHOTO_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _photo_path(filename: str) -> Path:
+    return _profile_photo_dir() / Path(filename).name
+
+
+async def save_profile_photo(user: User, file: UploadFile) -> str:
+    """
+    Validate and store a profile photo for the authenticated user,
+    replacing any previous one.
+
+    Raises:
+        HTTPException 400: invalid type, size, or unreadable image.
+    """
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in PROFILE_PHOTO_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile photo must be a JPG or PNG image.",
+        )
+    if (file.content_type or "").lower() not in PROFILE_PHOTO_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile photo must be a JPG or PNG image.",
+        )
+
+    content = await file.read()
+    await file.seek(0)
+    if len(content) > MAX_PROFILE_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile photo must be under 2 MB.",
+        )
+
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            img.verify()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file is not a valid image.",
+        )
+
+    if user.profile_photo:
+        try:
+            _photo_path(user.profile_photo).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    stored = f"{uuid4().hex}{ext}"
+    _photo_path(stored).write_bytes(content)
+    user.profile_photo = stored
+    await user.save()
+    logger.info("Profile photo updated for %s", user.email)
+    return stored
+
+
+async def delete_profile_photo(user: User) -> None:
+    """Remove the user's profile photo, reverting to default initials."""
+    if user.profile_photo:
+        try:
+            _photo_path(user.profile_photo).unlink(missing_ok=True)
+        except OSError:
+            pass
+        user.profile_photo = None
+        await user.save()

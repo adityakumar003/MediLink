@@ -1,9 +1,10 @@
 """
 app/services/ollama_service.py
 ───────────────────────────────
-Ollama API integration — the ONLY place that calls the local Ollama API.
+Analysis dispatcher plus optional local Ollama client.
 
-Architecture: Routes/Services → analyse_report_text() → Ollama API
+Architecture: Routes → analyse_report_text() → hf_space | ollama | offline
+Ollama is used only when AI_MODE=ollama. Hugging Face failures do not fall back here.
 """
 
 from __future__ import annotations
@@ -18,30 +19,48 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.ai.ollama.prompts import build_analysis_prompt, SYSTEM_CONTEXT
+from app.services.offline_analysis_service import analyse_report_text_offline
 
 logger = logging.getLogger(__name__)
 
 
 async def analyse_report_text(extracted_text: str) -> Dict[str, Any]:
     """
-    Send extracted medical report text to the local Ollama API and return
-    a structured analysis result as a Python dictionary.
+    Dispatch extracted report text to the configured analysis provider.
 
-    Args:
-        extracted_text: Plain text extracted from the PDF report.
+    AI_MODE=hf_space (default): Hugging Face Gradio Space (Qwen2.5-3B-Instruct).
+    AI_MODE=gemini: Google Gemini API (requires GEMINI_API_KEY).
+    AI_MODE=ollama: local Ollama /api/generate.
+    AI_MODE=offline: conservative regex extraction without an LLM.
 
-    Returns:
-        Parsed dictionary matching the AnalysisResult schema.
-
-    Raises:
-        HTTPException 503: if the Ollama API call fails.
-        HTTPException 422: if Ollama returns invalid/unparseable JSON.
+    When ENABLE_LLM_SUMMARY=false, no LLM provider is contacted regardless
+    of AI_MODE; the deterministic local pipeline runs instead.
     """
     if not extracted_text or len(extracted_text.strip()) < 50:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Extracted text is too short to analyse. Please upload a valid medical report.",
         )
+
+    if not settings.ENABLE_LLM_SUMMARY and settings.AI_MODE in {"hf_space", "gemini", "ollama"}:
+        logger.info(
+            "LLM summary disabled (ENABLE_LLM_SUMMARY=false); using deterministic analysis."
+        )
+        return analyse_report_text_offline(extracted_text)
+
+    if settings.AI_MODE == "hf_space":
+        logger.info("Using Hugging Face Qwen ZeroGPU Space for report analysis.")
+        from app.services.hf_space_service import analyse_report_text_hf
+        return await analyse_report_text_hf(extracted_text)
+
+    if settings.AI_MODE == "gemini":
+        logger.info("Using Google Gemini for report analysis.")
+        from app.services.gemini_service import analyse_report_text_gemini
+        return await analyse_report_text_gemini(extracted_text)
+
+    if settings.AI_MODE == "offline":
+        logger.info("Using conservative offline report analysis.")
+        return analyse_report_text_offline(extracted_text)
 
     prompt = build_analysis_prompt(extracted_text)
     
@@ -63,7 +82,7 @@ async def analyse_report_text(extracted_text: str) -> Dict[str, Any]:
 
     try:
         logger.info("Sending report text (%d chars) to Ollama (%s)…", len(extracted_text), settings.OLLAMA_MODEL)
-        async with httpx.AsyncClient(timeout=600.0) as client:
+        async with httpx.AsyncClient(timeout=settings.OLLAMA_TIMEOUT_SECONDS) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             raw_text = response.json().get("response", "")
@@ -128,22 +147,15 @@ def _parse_ollama_response(raw_response: str) -> Dict[str, Any]:
                 detail="AI returned an invalid response format. Please try again.",
             )
 
-    # Validate required top-level keys
-    required_keys = {"summary", "parameters", "disease_risks"}
-    missing = required_keys - set(data.keys())
-    if missing:
-        logger.warning("Ollama JSON missing keys: %s", missing)
-        # Fill defaults rather than raising — graceful degradation
-        if "summary" not in data:
-            data["summary"] = "Analysis completed. Please consult a medical professional for interpretation."
-        if "parameters" not in data:
-            data["parameters"] = []
-        if "disease_risks" not in data:
-            data["disease_risks"] = {
-                "diabetes":       {"level": "Insufficient Data", "reason": "No relevant markers found."},
-                "ckd":            {"level": "Insufficient Data", "reason": "No relevant markers found."},
-                "anemia":         {"level": "Insufficient Data", "reason": "No relevant markers found."},
-                "cardiovascular": {"level": "Insufficient Data", "reason": "No relevant markers found."},
-            }
+    # Disease assessment is deterministic and shared across providers:
+    # re-derive from parameters so model-invented risk levels never survive.
+    # Malformed rows are ignored by the engine; validated statuses elsewhere
+    # come from lab_validation (HF/Gemini/offline paths).
+    from app.services.risk_assessment import derive_disease_risks, ensure_consistent_summary
+
+    if isinstance(data.get("parameters"), list):
+        data["disease_risks"] = derive_disease_risks(data["parameters"])
+        if isinstance(data.get("summary"), str):
+            data["summary"] = ensure_consistent_summary(data["summary"], data["parameters"])
 
     return data

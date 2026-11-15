@@ -11,7 +11,7 @@ Imported throughout the backend as:
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         default="medical_report_analyzer",
         description="MongoDB database name.",
     )
+    USE_IN_MEMORY_DB: bool = Field(
+        default=True,
+        description="Use an in-memory MongoDB-compatible database for local development.",
+    )
 
     # ── JWT Authentication ─────────────────────────────────────────────────
     SECRET_KEY: str = Field(
@@ -50,13 +54,65 @@ class Settings(BaseSettings):
         default=30, description="JWT access token lifetime in minutes."
     )
 
-    # ── Ollama AI ───────────────────────────────────────────────────────────
+    # ── AI Inference Provider (Hugging Face / Ollama / Offline) ───────────
+    AI_MODE: str = Field(
+        default="hf_space",
+        description="Analysis provider: hf_space (Hugging Face ZeroGPU Space), gemini, ollama, or offline.",
+    )
+    HF_SPACE_URL: str = Field(
+        default="https://huggingface.co/spaces/adityaksingh/MediBridge-qwen",
+        description="Hugging Face Space URL or repo_id for the Qwen medical model.",
+    )
+    HF_TOKEN: Optional[str] = Field(
+        default=None,
+        description="Optional Hugging Face access token for authenticated or private Spaces.",
+    )
+    HF_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        gt=0,
+        description="Maximum wait time for Hugging Face Space response in seconds.",
+    )
+
+    # ── Google Gemini (Optional Summary Provider) ──────────────────────────
+    GEMINI_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Google Gemini API key. Required only when AI_MODE=gemini.",
+    )
+    GEMINI_MODEL: str = Field(
+        default="gemini-3.5-flash-lite",
+        description="Gemini model name for report analysis.",
+    )
+    GEMINI_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        gt=0,
+        description="Maximum wait time for a Gemini response in seconds.",
+    )
+    ENABLE_LLM_SUMMARY: bool = Field(
+        default=True,
+        description="When false, no LLM generation (HF/Gemini/Ollama) is triggered; "
+        "analysis uses the deterministic local pipeline with a template summary.",
+    )
+
+    # ── Ollama Local AI (Fallback / Alternative) ──────────────────────────
     OLLAMA_BASE_URL: str = Field(
         default="http://localhost:11434", description="Base URL for local Ollama instance."
     )
     OLLAMA_MODEL: str = Field(
-        default="llama3", description="Ollama model to use for analysis."
+        default="llama3.2:1b", description="Ollama model to use for analysis."
     )
+    OLLAMA_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        gt=0,
+        description="Maximum wait time for an Ollama response.",
+    )
+
+    @field_validator("AI_MODE")
+    @classmethod
+    def validate_ai_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"hf_space", "gemini", "offline", "ollama"}:
+            raise ValueError("AI_MODE must be 'hf_space', 'gemini', 'ollama', or 'offline'.")
+        return normalized
 
     # ── CORS ───────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str | List[str] = Field(

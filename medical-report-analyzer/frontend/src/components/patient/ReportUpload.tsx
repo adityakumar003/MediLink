@@ -6,6 +6,7 @@ import { useState, useRef, type FC } from 'react'
 import { uploadReport, triggerAnalysis } from '../../services/reportService'
 import type { ReportUploadResponse } from '../../types/report.types'
 import LoadingSpinner from '../common/LoadingSpinner'
+import Icon from '../common/Icon'
 
 interface ReportUploadProps {
   onUploaded?: (report: ReportUploadResponse & { analyzed?: boolean }) => void
@@ -16,14 +17,17 @@ type Stage = 'idle' | 'uploading' | 'uploaded' | 'analyzing' | 'done' | 'error'
 const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
   const [stage, setStage] = useState<Stage>('idle')
   const [file, setFile] = useState<File | null>(null)
-  const [report, setReport] = useState<ReportUploadResponse | null>(null)
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const allowedTypes = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'])
+
   const handleFile = (f: File) => {
-    if (f.type !== 'application/pdf') {
-      setError('Only PDF files are accepted.')
+    const ext = f.name.split('.').pop()?.toLowerCase()
+    const allowedExt = ext === 'pdf' || ext === 'jpg' || ext === 'jpeg' || ext === 'png'
+    if (!allowedTypes.has(f.type) && !allowedExt) {
+      setError('Only PDF and image files (JPG, JPEG, PNG) are accepted.')
       return
     }
     if (f.size > 10 * 1024 * 1024) {
@@ -33,7 +37,6 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
     setFile(f)
     setError('')
     setStage('idle')
-    setReport(null)
   }
 
   const handleUpload = async () => {
@@ -42,7 +45,6 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
     setError('')
     try {
       const res = await uploadReport(file)
-      setReport(res)
       setStage('uploaded')
       // Immediately trigger analysis
       setStage('analyzing')
@@ -57,33 +59,36 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
   }
 
   const reset = () => {
-    setStage('idle'); setFile(null); setReport(null); setError('')
+    setStage('idle'); setFile(null); setError('')
     if (inputRef.current) inputRef.current.value = ''
   }
 
   return (
     <div className="card">
-      <h3 className="font-semibold text-slate-800 mb-1">📄 Upload Medical Report</h3>
-      <p className="text-sm text-slate-500 mb-4">Upload a PDF lab report to get an AI-powered analysis.</p>
+      <h3 className="flex items-center gap-2 font-semibold text-slate-800 mb-1">
+        <span className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
+          <Icon name="file" className="w-4 h-4" />
+        </span>
+        Upload Medical Report
+      </h3>
+      <p className="text-sm text-slate-500 mb-4">Upload a PDF or image lab report to get an AI-powered analysis.</p>
 
       {/* Drop zone */}
-      {stage === 'idle' && (
+      {stage === 'idle' && !file && (
         <div
           onDragOver={e => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
           onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
           onClick={() => inputRef.current?.click()}
-          className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center gap-3 cursor-pointer transition-colors
-            ${dragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50'}`}>
-          <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-              d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-          </svg>
+          className={`dropzone ${dragOver ? 'drag-over' : ''}`}>
+          <span className="stat-tile !w-14 !h-14">
+            <Icon name="upload" className="w-6 h-6" />
+          </span>
           <div className="text-center">
-            <p className="font-medium text-slate-600">Drop your PDF here</p>
-            <p className="text-xs text-slate-400 mt-1">or click to browse — max 10 MB</p>
+            <p className="font-semibold text-slate-800">Drag & drop your lab report</p>
+            <p className="text-sm text-slate-400 mt-1">or click to browse files</p>
           </div>
-          <input ref={inputRef} type="file" accept=".pdf,application/pdf" className="sr-only"
+          <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only"
             onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
         </div>
       )}
@@ -106,17 +111,18 @@ const ReportUpload: FC<ReportUploadProps> = ({ onUploaded }) => {
       {/* Status messages */}
       {stage === 'uploading' && (
         <div className="mt-4 flex items-center gap-3 text-sm text-slate-600">
-          <LoadingSpinner size="sm" /> Uploading PDF…
+          <LoadingSpinner size="sm" /> Uploading report…
         </div>
       )}
       {stage === 'analyzing' && (
         <div className="mt-4 flex items-center gap-3 text-sm text-slate-600">
-          <LoadingSpinner size="sm" /> Running AI analysis (this may take 10–30 seconds)…
+          <LoadingSpinner size="sm" /> Running AI analysis (hosted model may take a minute if it is waking up)…
         </div>
       )}
       {stage === 'done' && (
         <div className="alert-success mt-4">
-          ✅ Analysis complete! Scroll down to view your results.
+          <Icon name="checkCircle" className="w-4 h-4 shrink-0" />
+          Analysis complete! Scroll down to view your results.
           <button onClick={reset} className="ml-auto text-xs underline">Upload another</button>
         </div>
       )}
