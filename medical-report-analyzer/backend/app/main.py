@@ -30,7 +30,7 @@ from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection, ping_database
 
 # ── Route imports ──────────────────────────────────────────────────────────
-from app.api.routes import auth, chat, doctors, patients, reports, analysis
+from app.api.routes import auth, chat, doctors, patients, reports, analysis, video
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,7 @@ def create_application() -> FastAPI:
     app.include_router(reports.router,  prefix="/reports",  tags=["Reports"])
     app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
     app.include_router(chat.router,     prefix="/chat",     tags=["Chat"])
+    app.include_router(video.router,    prefix="/video",    tags=["Video Consultations"])
 
     return app
 

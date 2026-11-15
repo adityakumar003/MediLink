@@ -15,6 +15,7 @@
 - [MongoDB Atlas Setup](#-mongodb-atlas-setup)
 - [Hugging Face Space (default LLM)](#-hugging-face-space-default-llm)
 - [Optional Ollama Setup](#-optional-ollama-setup)
+- [Video Consultations (LiveKit Cloud)](#-video-consultations-livekit-cloud)
 - [Running Tests](#-running-tests)
 - [Docker Compose](#-running-with-docker-compose)
 - [MVP Scope vs Future Modules](#-mvp-scope-vs-future-modules)
@@ -47,6 +48,7 @@ Patients generate medical lab reports regularly, but most people lack the medica
 | Patient dashboard | ✅ Complete |
 | Doctor dashboard with patient management | ✅ Complete |
 | Doctor–patient connection and chat | ✅ Complete |
+| 1:1 doctor–patient video consultations (LiveKit Cloud) | ✅ Complete |
 | GPS-based nearby doctor discovery | ✅ Complete |
 
 ---
@@ -70,6 +72,7 @@ Patients generate medical lab reports regularly, but most people lack the medica
 | httpx | 0.27.0 | HTTP client (Ollama path) |
 | gradio-client | ≥2.7.0 | Hugging Face Gradio Space client |
 | PyMuPDF | 1.24.3 | Primary PDF text extraction |
+| LiveKit Python SDK | 2.0.0 | Room-scoped access-token generation |
 | pytest | 8.2.0 | Test framework |
 | pytest-asyncio | 0.23.6 | Async test support |
 
@@ -84,6 +87,9 @@ Patients generate medical lab reports regularly, but most people lack the medica
 | TailwindCSS | 3.4.x | Utility-first CSS framework |
 | React Hook Form | 7.51.x | Form state management |
 | Zod | 3.23.x | Schema validation |
+| LiveKit Client | 2.24.x | WebRTC room, camera, microphone |
+| LiveKit React Components | 2.9.x | Room lifecycle, tracks, audio rendering |
+| LiveKit Component Styles | 1.2.x | Accessible base styles for media controls |
 
 ### Database
 | Technology | Purpose |
@@ -111,8 +117,9 @@ medical-report-analyzer/
 │       │   ├── common/          # Navbar, Sidebar, ProtectedRoute, etc.
 │       │   ├── auth/            # LoginForm, RegisterForm
 │       │   ├── patient/         # ReportUpload, DiseaseRiskCard, etc.
-│       │   └── doctor/          # PatientList, RequestCard, etc.
-│       ├── pages/               # Route-level page components
+│       │   ├── doctor/          # PatientList, RequestCard, etc.
+│       │   └── video/           # Consultation list + doctor scheduling UI
+│       ├── pages/               # Route-level page components (incl. video/VideoCallPage)
 │       ├── layouts/             # Page wrapper layouts
 │       ├── context/             # AuthContext (global auth state)
 │       ├── hooks/               # useAuth, useReportUpload
@@ -125,7 +132,7 @@ medical-report-analyzer/
 │       ├── main.py              # FastAPI app + lifespan + CORS + routers
 │       ├── api/
 │       │   ├── dependencies.py  # JWT auth guards, role checks
-│       │   └── routes/          # auth, doctors, patients, reports, analysis
+│       │   └── routes/          # auth, doctors, patients, reports, analysis, video
 │       ├── models/              # Beanie document models (MongoDB collections)
 │       ├── schemas/             # Pydantic request/response schemas
 │       ├── services/            # Business logic layer
@@ -176,6 +183,10 @@ Copy `backend/.env.example` to `backend/.env`. Never commit `.env` (it is gitign
 | `HF_TIMEOUT_SECONDS` | HF default | Wait time for Space inference (default `120`) |
 | `OLLAMA_BASE_URL` | Ollama only | Local Ollama service URL |
 | `OLLAMA_MODEL` | Ollama only | Installed model name |
+| `LIVEKIT_URL` | Video | `wss://your-project.livekit.cloud` from LiveKit Cloud |
+| `LIVEKIT_API_KEY` | Video | LiveKit API key — backend only, never frontend |
+| `LIVEKIT_API_SECRET` | Video | LiveKit API secret — backend only, never frontend |
+| `LIVEKIT_TOKEN_TTL_MINUTES` | ✅ | Participant token lifetime (default `60`, min `5`) |
 | `ALLOWED_ORIGINS` | ✅ | CORS allowed origins (default: `http://localhost:5173`) |
 | `UPLOAD_DIR` | ✅ | Directory for uploaded files (default: `uploads`) |
 | `MAX_FILE_SIZE_MB` | ✅ | Upload size limit in MB (default: `10`) |
@@ -241,9 +252,9 @@ cd medical-report-analyzer/frontend
 # 2. Install dependencies
 npm install
 
-# 3. (Optional) Create a frontend .env file for environment variables
-# Create frontend/.env.local:
-# VITE_API_BASE_URL=http://localhost:8000
+# 3. (Optional) Point the frontend at a separate API origin
+# Create frontend/.env.local only when NOT using Vite's dev proxy:
+# VITE_API_URL=http://localhost:8000
 
 # 4. Start the Vite dev server
 npm run dev
@@ -251,7 +262,9 @@ npm run dev
 
 The frontend will be available at: **http://localhost:5173**
 
-> **Note**: The Vite dev server is configured with a proxy. All requests to `/auth`, `/doctors`, `/patients`, `/reports`, `/analysis`, and `/health` are automatically forwarded to `http://localhost:8000`.
+> **Note**: The Vite dev server is configured with a proxy. All requests to `/auth`, `/doctors`, `/patients`, `/reports`, `/analysis`, `/chat`, `/video`, and `/health` are automatically forwarded to `http://localhost:8000`. Leave `VITE_API_URL` empty for this setup.
+>
+> LiveKit credentials are intentionally **not** frontend environment variables. The browser receives only a short-lived, room-scoped token from `POST /video/token`.
 
 ---
 
@@ -333,6 +346,72 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 - Switch back to Hugging Face with one change: `AI_MODE=hf_space`.
 - Gemini failures do **not** silently fall back to another provider.
 
+## 🎥 Video Consultations (LiveKit Cloud)
+
+The chat feature remains a separate persisted messaging system. Video calls use LiveKit Cloud only for the real-time media transport.
+
+### 1. Create a free LiveKit Cloud project
+
+1. Sign in at https://cloud.livekit.io and create a project on the free tier.
+2. Open **Settings → Keys** and copy the WebSocket URL, API key, and API secret.
+3. Put them in `backend/.env`:
+
+```env
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=your_livekit_api_key
+LIVEKIT_API_SECRET=your_livekit_api_secret
+LIVEKIT_TOKEN_TTL_MINUTES=60
+```
+
+No LiveKit variables belong in the frontend `.env`. Without these backend values, consultation records still work but `POST /video/token` returns **503** until configuration is complete.
+
+### 2. How authorization works
+
+- A doctor can start or schedule a consultation only for an **accepted** patient connection (`DoctorPatientRequest.status == accepted`).
+- The authenticated JWT identifies the user. The frontend never supplies a room name, participant identity, or role.
+- The backend derives the room from the consultation record and issues a participant-specific LiveKit token with:
+  - `roomJoin` scoped to exactly one consultation room
+  - audio/video publish and subscribe permissions
+  - a server-configured expiry
+- Both participants share the same consultation record and room. A patient cannot join before the doctor starts it.
+
+### 3. Lifecycle
+
+- `scheduled → started → in_progress → completed`
+- `cancelled` is available for scheduled or not-yet-joined consultations.
+
+- Starting a consultation does **not** pre-create a LiveKit room. The room is created when the first participant joins and LiveKit closes it after it becomes empty.
+- Temporary network disconnects do not mark a consultation completed. Only an explicit doctor **End** action or both participants explicitly leaving completes it.
+- When the doctor ends the call, the backend completes the record and the doctor sends an in-room notification so the patient's UI does not treat the end as a network error.
+- Camera, microphone, and screen-sharing resources are owned by LiveKit and released when the room screen unmounts.
+
+### 4. API endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/video/consultations` | Doctor starts now (omit `scheduled_at`) or schedules for later |
+| `GET` | `/video/consultations` | Current user's consultation history |
+| `GET` | `/video/consultations/{id}` | One authorized consultation |
+| `POST` | `/video/consultations/{id}/start` | Doctor starts a scheduled consultation |
+| `POST` | `/video/token` | Issue a room-scoped LiveKit token for the authenticated participant |
+| `POST` | `/video/consultations/{id}/leave` | Record an intentional leave |
+| `POST` | `/video/consultations/{id}/end` | Doctor ends and completes the consultation |
+| `POST` | `/video/consultations/{id}/cancel` | Cancel a scheduled/not-yet-joined consultation |
+
+### 5. Free-tier boundaries
+
+This implementation does not use LiveKit Agents, recording, transcription, egress, or SIP. It only uses room join plus audio/video publication. Browser camera/microphone access requires `https://` or `localhost`.
+
+### 6. Two-participant verification
+
+1. Connect a patient and doctor through the normal request/accept flow.
+2. Sign in as the doctor in one browser profile and the patient in another. Each profile has its own `localStorage`; two tabs in the same profile share one login token and will replace each other's session.
+3. On the doctor's **Video** page, choose the patient and click **Start now** (or **Schedule** and later **Start**).
+4. Allow camera/microphone access. In the patient's **Video** page, click **Join** once the status is **Ready to join**.
+5. Verify mute/camera controls, the connection indicator, the remote participant name/role, and that both participants see each other.
+6. Click **End** as the doctor and confirm the patient leaves automatically. A scheduled call can be cancelled by either participant before it starts.
+7. Regression-check login, report analysis, and the existing **Chats** page, which remains independent of LiveKit.
+
 ## 🧪 Running Tests
 
 ```bash
@@ -341,6 +420,8 @@ python -m pytest
 ```
 
 Automated tests force `AI_MODE=offline` for upload/history integration and **mock** Hugging Face (`gradio_client`), Gemini (`google.genai`), and PaddleOCR for provider/extraction tests. They do not call live models and do not require PaddlePaddle.
+
+Video tests use deterministic fake LiveKit credentials to verify consultation lifecycle, participant authorization, role guards, and signed room-scoped token grants. They do **not** connect to a LiveKit Cloud project; real two-browser media testing requires your own LiveKit credentials and camera/microphone permissions.
 
 ### PaddleOCR environment note
 
@@ -413,6 +494,7 @@ docker compose down
 - Structured data extraction (parameters, risks) mapped to the existing API contract
 - Patient dashboard (upload, view analysis)
 - Doctor dashboard (manage patients, view reports)
+- Secure 1:1 video consultations with LiveKit Cloud (schedule, join, leave, end)
 
 ### 🔜 Phase 2 — Advanced OCR & NER
 - Stronger OpenCV preprocessing (denoising, deskewing, contrast)

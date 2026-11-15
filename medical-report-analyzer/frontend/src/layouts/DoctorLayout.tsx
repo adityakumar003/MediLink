@@ -12,6 +12,7 @@ const NAV: { label: string; path: string; icon: IconName }[] = [
   { label: 'Dashboard', path: '/doctor/dashboard', icon: 'grid' },
   { label: 'Requests', path: '/doctor/requests', icon: 'users' },
   { label: 'Patients', path: '/doctor/patients', icon: 'user' },
+  { label: 'Video', path: '/doctor/consultations', icon: 'video' },
   { label: 'Analytics', path: '/doctor/analytics', icon: 'trendingUp' },
 ]
 

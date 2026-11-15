@@ -13,6 +13,10 @@ from fastapi.testclient import TestClient
 os.environ["USE_IN_MEMORY_DB"] = "true"
 os.environ["DATABASE_NAME"] = "medical_report_analyzer_test"
 os.environ["AI_MODE"] = "offline"
+# Deterministic, non-network LiveKit settings for token-generation tests.
+os.environ["LIVEKIT_URL"] = "wss://test.livekit.cloud"
+os.environ["LIVEKIT_API_KEY"] = "test-livekit-api-key"
+os.environ["LIVEKIT_API_SECRET"] = "test-livekit-api-secret-at-least-32-characters"
 
 from app.main import app
 

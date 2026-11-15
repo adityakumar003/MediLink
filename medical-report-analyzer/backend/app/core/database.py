@@ -42,6 +42,7 @@ from app.models.patient_profile import PatientProfile
 from app.models.doctor_patient_request import DoctorPatientRequest
 from app.models.medical_report import MedicalReport
 from app.models.chat_message import ChatMessage
+from app.models.consultation import Consultation
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ async def connect_to_mongo() -> None:
             DoctorPatientRequest,
             MedicalReport,
             ChatMessage,
+            Consultation,
         ],
     )
 

@@ -2,9 +2,11 @@
  * src/App.tsx
  * Root application with React Router v6 routing.
  */
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/common/ProtectedRoute'
+import LoadingSpinner from './components/common/LoadingSpinner'
 
 // Auth pages
 import LoginPage    from './pages/auth/LoginPage'
@@ -13,6 +15,9 @@ import RegisterPage from './pages/auth/RegisterPage'
 // Dashboards
 import PatientDashboard from './pages/patient/PatientDashboard'
 import DoctorDashboard  from './pages/doctor/DoctorDashboard'
+
+// Load LiveKit and the call UI only when a participant opens a room.
+const VideoCallPage = lazy(() => import('./pages/video/VideoCallPage'))
 
 // 404
 const NotFoundPage = () => (
@@ -63,6 +68,11 @@ function App() {
               <PatientDashboard section="chats" />
             </ProtectedRoute>
           } />
+          <Route path="/patient/consultations" element={
+            <ProtectedRoute requiredRole="patient">
+              <PatientDashboard section="consultations" />
+            </ProtectedRoute>
+          } />
 
           {/* Doctor routes */}
           <Route path="/doctor/dashboard" element={
@@ -83,6 +93,20 @@ function App() {
           <Route path="/doctor/analytics" element={
             <ProtectedRoute requiredRole="doctor">
               <DoctorDashboard section="analytics" />
+            </ProtectedRoute>
+          } />
+          <Route path="/doctor/consultations" element={
+            <ProtectedRoute requiredRole="doctor">
+              <DoctorDashboard section="consultations" />
+            </ProtectedRoute>
+          } />
+
+          {/* Shared full-screen video room */}
+          <Route path="/consultation/:consultationId" element={
+            <ProtectedRoute>
+              <Suspense fallback={<LoadingSpinner fullPage label="Loading video…" />}>
+                <VideoCallPage />
+              </Suspense>
             </ProtectedRoute>
           } />
 

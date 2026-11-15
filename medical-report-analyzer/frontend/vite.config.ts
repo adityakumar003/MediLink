@@ -56,6 +56,13 @@ export default defineConfig({
         proxyTimeout: 300000,
         timeout: 300000,
       },
+      '/video': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        proxyTimeout: 300000,
+        timeout: 300000,
+      },
       '/health': {
         target: 'http://localhost:8000',
         changeOrigin: true,
